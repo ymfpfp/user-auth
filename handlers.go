@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
+
+	jwt "github.com/ymfpfp/user-auth/jwt"
 )
 
 func drainAndClose(next http.Handler) http.Handler {
@@ -158,17 +160,36 @@ func (h *Handler) handleOAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The JWT is technically OIDC? Other things that get returned are access and refresh token 
 	// Google OAuth returns a JWT signed with asymmetric cryptography, RS256 = RSA + SHA-256.
 	// We should verify the JWT with Google public keys.
-	jwt, err := FromPayload(token.IdToken)
+	jwtToken, err := jwt.FromPayload(token.IdToken)
 	if err != nil {
 		http.Error(w, "Invalid request", http.StatusForbidden)
 		log.Panic(err)
 		return
 	}
 
-	verified := jwt.Verify()
-	if verified == false {
+	// Need to grab the JWK.
+	jwks, err := jwt.GetJWKS("https://www.googleapis.com/oauth2/v3/certs")
+	if err != nil {
+		http.Error(w, "Invalid request", http.StatusForbidden)
+		log.Panic(err)
+		return
+	}
+
+	jwk, err := jwks.GetJWK(jwtToken.Header.Kid)
+	if err != nil {
+		http.Error(w, "Invalid request", http.StatusForbidden)
+		log.Panic(err)
+		return
+	}
+		
+	verified, err := jwtToken.Verify(jwk, map[string]any{
+		"aud": h.config.ClientId,
+		"iss": "https://accounts.google.com",
+	})
+	if verified == false || err != nil {
 		http.Error(w, "Invalid request", http.StatusForbidden)
 		log.Panic(err)
 		return
@@ -176,6 +197,6 @@ func (h *Handler) handleOAuth(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(jwt.Claims)
+	_ = json.NewEncoder(w).Encode(jwtToken.Claims)
 }
 
