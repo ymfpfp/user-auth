@@ -2,63 +2,93 @@ package main
 
 import (
 	"database/sql"
+	// "html/template"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	data "github.com/ymfpfp/user-auth/data"
+	oauth "github.com/ymfpfp/user-auth/oauth"
 )
 
 type Config struct {
-	// Public identifier.
-	ClientId string
-	ClientSecret string
+	GoogleClientId string
+	GoogleClientSecret string
+	Port string
+}
+
+type Handler struct {
+	db *sql.DB
+	config *Config
+	sessions data.Sessions
 }
 
 func main() {
+	port, ok := os.LookupEnv("PORT")
+	if !ok {
+		port = "9000"
+	} else {
+		_, err := strconv.Atoi(port)
+		if err != nil {
+			port = "9000"
+		}
+	}
+
 	config := Config {
-		ClientId: os.Getenv("CLIENT_ID"),
-		ClientSecret: os.Getenv("CLIENT_SECRET"),
+		GoogleClientId: os.Getenv("GOOGLE_CLIENT_ID"),
+		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
+		Port: port,
 	}
 
-	db, err := sql.Open("sqlite3", ":memory:")
-	if err != nil {
-		log.Fatal(err)
-	}
+	db := data.NewDb()
 	defer db.Close()
-
-	stmt := `
-	CREATE TABLE IF NOT EXISTS users (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		name TEXT,
-		email TEXT
-	);
-	CREATE TABLE IF NOT EXISTS oauth (
-		user_id INTEGER,
-		provider TEXT,
-		subject TEXT,
-		FOREIGN KEY (user_id) REFERENCES users(id),
-		PRIMARY KEY (provider, subject)
-	);
-	`
-
-	_, err = db.Exec(stmt)
-	if err != nil {
-		log.Fatal("Failed to set up db", err)
-	}
 
 	h := &Handler{
 		db: db,
 		config: &config,
-		sessions: EmptySession(),
+		sessions: data.EmptySession(),
 	}
+	_ = h
+
+	// Set up new server mux.
+	serveMux := http.NewServeMux()
+
+	serveMux.HandleFunc("/", index)
+
+	googleOIDC, err := oauth.GetConfig(oauth.GoogleConfigEndpoint)
+	googleClient := oauth.Client {
+		Callback: "/oauth2/google", 
+		Id: config.GoogleClientId,
+		Scopes: "openid email profile",
+		Secret: config.GoogleClientSecret,
+	}
+	provider := oauth.Provider {
+		Config: googleOIDC,
+		Client: googleClient,
+	}
+	if err != nil {
+		log.Fatal("Unable to configure Google OIDC ", err)
+	}
+	serveMux.Handle("/login/google", oauth.Redirect(provider))
+	serveMux.Handle("/oauth2/google", oauth.Callback(provider))
+
+	// githubConfig, err := oauth.GetConfig(oauth.GithubConfigEndpoint)
+	// if err != nil {
+	// 	log.Fatal("Unable to configure Github OAuth ", err)
+	// }
+	// _ = githubConfig
+	// serveMux.Handle("/oauth2/github", oauth.Redirect(&githubConfig))
+
+	mux := drainAndClose(serveMux)
 
 	server := &http.Server{
-		Addr: "127.0.0.1:9000",
+		Addr: "127.0.0.1:" + config.Port,
 		Handler: http.TimeoutHandler(
-			h.Mux(),
+			mux,
 			2 * time.Minute,
 			"",
 		),
@@ -78,3 +108,29 @@ func main() {
 	}
 }
 
+func drainAndClose(next http.Handler) http.Handler {
+	return http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r)
+			_, _ = io.Copy(io.Discard, r.Body)
+			_ = r.Body.Close()
+		},
+	)
+}
+
+func index(w http.ResponseWriter, r *http.Request) {
+	html := `
+	<!doctype html>
+	<html>
+		<head></head>
+		<body>
+			<p><a href="/login/google">Continue with Google</a><p>
+			<p><a href="/login/github">Continue with Github</a></p>
+			<p><a href="/login/email">Continue with email</a></p>
+			<p><a href="/login/saml">Continue with SAML SSO</a></p>
+			<p><a href="/login/passkey">Login with passkey</a></p>
+		</body>
+	</html>
+	`
+	w.Write([]byte(html))
+}
