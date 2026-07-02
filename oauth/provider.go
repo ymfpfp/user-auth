@@ -1,33 +1,43 @@
 package oauth
 
-import "github.com/ymfpfp/user-auth/utils"
+import (
+	"log"
+
+	"github.com/ymfpfp/user-auth/jwt"
+)
 
 type Client struct {
 	Callback string
+
 	Id string
-	Scopes string 
 	Secret string
+
+	Scopes string 
 }
 
-// A provider is made up of config info and client specific info.
+// A provider is made up of config info, client specific info, and a resolver which is just 
+// a callback that performs either OAuth or OIDC.
 type Provider struct {
-	Config Config
 	Client Client
+	Config Config
+	Resolver Resolver
 }
 
-// todo(jc): I think a lot of OAuth libraries have specific code for specific providers
-// and maybe that's something we could figure out.
-func (p Provider) PreferredResponseType() string {
-	if len(p.Config.ResponseTypesSupported) == 1 {
-		return p.Config.ResponseTypesSupported[0]
-	}
-	// In the OAuth standard, `response_type` is fixed to `token` but nowadays 
-	// Authorization Code Flow with `code` is preferred - you get an authorization code,
-	// then exchange it server-side for tokens, rather than getting a token directly back
-	// which is bad for security and also bad for refresh tokens.
-	if utils.Contains(p.Config.ResponseTypesSupported, "code") {
-		return "code"
+func NewOIDCProvider(config Config, client Client) Provider {
+	jwks, err := jwt.GetJWKS(config.JWKSUri)
+	if err != nil {
+		log.Fatalf("Unable to get JWKS for provider %s: %v", config.Issuer, err)
 	}
 
-	return "token"
+	return Provider{
+		Client: client,
+		Config: config,
+		Resolver: &OIDCResolver{
+			JWKS: jwks,
+			ToVerify: OIDCVerification{
+				Audience: client.Id,
+				Issuer: config.Issuer,
+			},
+		},
+	}
 }

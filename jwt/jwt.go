@@ -9,7 +9,6 @@ import (
 	"math/big"
 	"net/http"
 	"strings"
-	"time"
 )
 
 type AlgType string
@@ -142,26 +141,7 @@ func (jwt JWT) verifyRSA(jwk JWK) (bool, error) {
 	return true, nil
 }
 
-func (jwt JWT) Verify(jwk JWK, expected map[string]any) (bool, error) {
-	// todo(jc): Type assertion sucks is code smell etc.
-
-	// Check `aud`. Short for audience, basically is this token meant for this client?
-	if jwt.Claims["aud"].(string) != expected["aud"].(string)  {
-		return false, InvalidJWT
-	}
-
-	// Check `exp`. Short for expiration, check that token is still valid.
-	exp, ok := jwt.Claims["exp"].(float64)
-	if !ok || time.Now().Unix() >= int64(exp) {
-		return false, InvalidJWT
-	}
-
-	// Check `iss`. Short for issuer, basically was this token issued by who would expect 
-	// it from?
-	if jwt.Claims["iss"].(string) != expected["iss"].(string) {
-		return false, InvalidJWT
-	}
-	
+func (jwt JWT) Verify(jwk JWK) (bool, error) {	
 	switch jwk.Alg {
 	case RS256: 
 		return jwt.verifyRSA(jwk)

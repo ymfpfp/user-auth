@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	// "html/template"
 	"io"
 	"log"
@@ -59,29 +60,31 @@ func main() {
 
 	serveMux.HandleFunc("/", index)
 
-	googleOIDC, err := oauth.GetConfig(oauth.GoogleConfigEndpoint)
+	googleConfig, err := oauth.GetConfig(oauth.GoogleConfigEndpoint)
 	googleClient := oauth.Client {
 		Callback: "/oauth2/google", 
 		Id: config.GoogleClientId,
 		Scopes: "openid email profile",
 		Secret: config.GoogleClientSecret,
 	}
-	provider := oauth.Provider {
-		Config: googleOIDC,
-		Client: googleClient,
-	}
+	googleProvider := oauth.NewOIDCProvider(googleConfig, googleClient) 
 	if err != nil {
 		log.Fatal("Unable to configure Google OIDC ", err)
 	}
-	serveMux.Handle("/login/google", oauth.Redirect(provider))
-	serveMux.Handle("/oauth2/google", oauth.Callback(provider))
-
-	// githubConfig, err := oauth.GetConfig(oauth.GithubConfigEndpoint)
-	// if err != nil {
-	// 	log.Fatal("Unable to configure Github OAuth ", err)
-	// }
-	// _ = githubConfig
-	// serveMux.Handle("/oauth2/github", oauth.Redirect(&githubConfig))
+	serveMux.Handle("/login/google", oauth.Redirect(googleProvider))
+	serveMux.Handle("/oauth2/google", oauth.Callback(googleProvider, http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			ctx := r.Context()
+			claims, ok := oauth.ClaimsFromContext(ctx)
+			if !ok {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(claims)
+		},
+	)))
 
 	mux := drainAndClose(serveMux)
 
@@ -125,7 +128,6 @@ func index(w http.ResponseWriter, r *http.Request) {
 		<head></head>
 		<body>
 			<p><a href="/login/google">Continue with Google</a><p>
-			<p><a href="/login/github">Continue with Github</a></p>
 			<p><a href="/login/email">Continue with email</a></p>
 			<p><a href="/login/saml">Continue with SAML SSO</a></p>
 			<p><a href="/login/passkey">Login with passkey</a></p>
@@ -134,3 +136,4 @@ func index(w http.ResponseWriter, r *http.Request) {
 	`
 	w.Write([]byte(html))
 }
+

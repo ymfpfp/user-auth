@@ -1,7 +1,7 @@
 package oauth
 
 import (
-	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -10,9 +10,25 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/ymfpfp/user-auth/jwt"
 	utils "github.com/ymfpfp/user-auth/utils"
 )
+
+type contextKey string
+
+const (
+	claimsKey contextKey = "claims"
+	tokensKey contextKey = "tokens"
+)
+
+func ClaimsFromContext (ctx context.Context) (Claims, bool) {
+	claims, ok := ctx.Value(claimsKey).(Claims)
+	return claims, ok
+}
+
+func TokensFromContext (ctx context.Context) (Tokens, bool) {
+	tokens, ok := ctx.Value(tokensKey).(Tokens)
+	return tokens, ok
+}
 
 func randomState() string {
 	b := make([]byte, 16)
@@ -27,6 +43,11 @@ func Redirect(provider Provider) http.Handler {
 		if !utils.Contains(provider.Config.ScopesSupported, scope) {
 			log.Fatalf("Unsupported scope %s given provider %s", scope, provider.Config.Issuer)
 	 	}
+	}
+
+	// Prefer the modern authorization code flow.
+	if !utils.Contains(provider.Config.ResponseTypesSupported, "code") {
+		log.Fatalf("Provider %s does not support authorization code flow", provider.Config.Issuer)
 	}
 
 	return http.HandlerFunc(
@@ -60,7 +81,7 @@ func Redirect(provider Provider) http.Handler {
 			q.Set("client_id", provider.Client.Id)
 			q.Set("redirect_uri", redirectUri.String())
 			q.Set("scope", provider.Client.Scopes)
-			q.Set("response_type", provider.PreferredResponseType())
+			q.Set("response_type", "code")
 			q.Set("state", state)
 			redirect.RawQuery = q.Encode()
 
@@ -70,98 +91,78 @@ func Redirect(provider Provider) http.Handler {
 	)
 }
 
-func Callback(provider Provider) http.Handler {
-	jwks, err := jwt.GetJWKS(provider.Config.JWKSUri)
-	if err != nil {
-		log.Fatal("Unable to get JWKS ", jwks)
-	}
-
+func Callback(provider Provider, callback http.Handler) http.Handler {
 	return http.HandlerFunc(
 		func (w http.ResponseWriter, r *http.Request) {
 			q := r.URL.Query()
 
 			state := q.Get("state")
-			// todo(jc): This is too specific. 
+			// We use authorization code flow.
 			code := q.Get("code")
 
 			cookie, err := r.Cookie("state")
-			log.Print(state, cookie.Value)
+			// Check that the cookie and state match to prevent being MITM'd.
 			if err != nil || cookie.Value != state {
 				w.WriteHeader(http.StatusForbidden)
 				return
 			}
 
-			type ExchangeRequest struct {
-				Code string `json:"code"`
-				ClientId string `json:"client_id"`
-				ClientSecret string `json:"client_secret"`
-				RedirectUri string `json:"redirect_uri"`
-				GrantType string `json:"grant_type"`
+			// todo(jc): TLS
+			redirectUri := url.URL {
+				Scheme: "http",
+				Host: r.Host,
+				Path: provider.Client.Callback,
 			}
-			exchange := ExchangeRequest {
+			request := TokenRequest {
 				// Exchange code for token.
 				Code: code,
 				ClientId: provider.Client.Id,
 				// Client secret confirms that the request is indeed coming from my app.
 				ClientSecret: provider.Client.Secret,
-				// todo(jc): Why is this necessary? Also it's fixed
-				RedirectUri: "http://127.0.0.1:9000/oauth2/google",
+				// todo(jc): Why is this necessary? 
+				RedirectUri: redirectUri.String(),
 				// Must be set to `authorization_code` per the standard, this returns the
 				// authorization code.
 				GrantType: "authorization_code",
 			}
-			buffer := new(bytes.Buffer)
-			err = json.NewEncoder(buffer).Encode(&exchange)
+			encodedRequest, err := request.Encode() 
 			if err != nil {
 				w.WriteHeader(http.StatusForbidden)
 				return
 			}
-			tokenResponse, err := http.Post(
-				"https://oauth2.googleapis.com/token",
+			response, err := http.Post(
+				provider.Config.TokenEndpoint,
 				"application/json",
-				buffer,
+				encodedRequest,
 			)
 			if err != nil {
 				w.WriteHeader(http.StatusForbidden)
 				return
 			}
-			defer tokenResponse.Body.Close()
+			defer response.Body.Close()
 
-			var token struct {
-				// This is the JWT for OIDC.
-				// todo(jc): This should not be anon struct.
-				IdToken string `json:"id_token"`
-			}
-			err = json.NewDecoder(tokenResponse.Body).Decode(&token)
+			var tokens Tokens
+			err = json.NewDecoder(response.Body).Decode(&tokens)
 			if err != nil {
 				w.WriteHeader(http.StatusForbidden)
 				return
 			}
 
-			jwtToken, err := jwt.FromPayload(token.IdToken)
+			// At this point, we have the token response. It is up to the resolver to 
+			// check that the token is valid and maybe return some info (`claims` generalized). 
+			claims, err := provider.Resolver.Resolve(tokens)	
 			if err != nil {
 				w.WriteHeader(http.StatusForbidden)
 				return
 			}
 
-			jwk, err := jwks.GetJWK(jwtToken.Header.Kid)
-			if err != nil {
-				w.WriteHeader(http.StatusForbidden)
-				return
-			}
+			// Inject into context, and then trigger callback, this is designed to be used as
+			// middleware.
+			ctx := r.Context()
+			ctx = context.WithValue(ctx, claimsKey, claims)
+			ctx = context.WithValue(ctx, tokensKey, tokens)
 
-			verified, err := jwtToken.Verify(jwk, map[string]any{
-				"aud": provider.Client.Id,
-				"iss": provider.Config.Issuer,
-			})
-			if verified == false || err != nil {
-				w.WriteHeader(http.StatusForbidden)
-				return
-			}
-
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(jwtToken.Claims)
+			callback.ServeHTTP(w, r.WithContext(ctx))
 		},
 	)
 }
