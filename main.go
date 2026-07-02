@@ -12,23 +12,30 @@ import (
 	"strconv"
 	"time"
 
-	data "github.com/ymfpfp/user-auth/data"
-	oauth "github.com/ymfpfp/user-auth/oauth"
+	"github.com/joho/godotenv"
+	"github.com/ymfpfp/user-auth/data"
+	"github.com/ymfpfp/user-auth/oauth"
 )
 
 type Config struct {
 	GoogleClientId string
 	GoogleClientSecret string
+
+	GithubClientId string
+	GithubClientSecret string
+
 	Port string
 }
 
 type Handler struct {
 	db *sql.DB
 	config *Config
-	sessions data.Sessions
+	sessions *data.Sessions
 }
 
 func main() {
+	godotenv.Load()
+
 	port, ok := os.LookupEnv("PORT")
 	if !ok {
 		port = "9000"
@@ -42,6 +49,10 @@ func main() {
 	config := Config {
 		GoogleClientId: os.Getenv("GOOGLE_CLIENT_ID"),
 		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
+
+		GithubClientId: os.Getenv("GITHUB_CLIENT_ID"),
+		GithubClientSecret: os.Getenv("GITHUB_CLIENT_SECRET"),
+
 		Port: port,
 	}
 
@@ -61,18 +72,18 @@ func main() {
 	serveMux.HandleFunc("/", index)
 
 	googleConfig, err := oauth.GetConfig(oauth.GoogleConfigEndpoint)
-	googleClient := oauth.Client {
+	if err != nil {
+		log.Fatal("Unable to configure Google OIDC ", err)
+	}
+	googleClient := oauth.Client{
 		Callback: "/oauth2/google", 
 		Id: config.GoogleClientId,
 		Scopes: "openid email profile",
 		Secret: config.GoogleClientSecret,
 	}
 	googleProvider := oauth.NewOIDCProvider(googleConfig, googleClient) 
-	if err != nil {
-		log.Fatal("Unable to configure Google OIDC ", err)
-	}
-	serveMux.Handle("/login/google", oauth.Redirect(googleProvider))
-	serveMux.Handle("/oauth2/google", oauth.Callback(googleProvider, http.HandlerFunc(
+	serveMux.Handle("/login/google", googleProvider.Redirect())
+	serveMux.Handle("/oauth2/google", googleProvider.Callback(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()
 			claims, ok := oauth.ClaimsFromContext(ctx)
@@ -85,6 +96,16 @@ func main() {
 			_ = json.NewEncoder(w).Encode(claims)
 		},
 	)))
+
+	githubConfig := oauth.Config{
+		AuthorizationEndpoint: "https://github.com/login/oauth/authorize",
+	}
+	githubClient := oauth.Client{
+		Callback: "/oauth2/github",
+		Id: config.GithubClientId,
+		Scopes: "profile",
+		Secret: config.GithubClientSecret,
+	}
 
 	mux := drainAndClose(serveMux)
 

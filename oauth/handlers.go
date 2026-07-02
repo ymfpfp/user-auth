@@ -30,13 +30,16 @@ func TokensFromContext (ctx context.Context) (Tokens, bool) {
 	return tokens, ok
 }
 
-func randomState() string {
+func randomState() (string, error) {
 	b := make([]byte, 16)
-	rand.Read(b)
-	return hex.EncodeToString(b)
+	_, err := rand.Read(b)
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
-func Redirect(provider Provider) http.Handler {
+func (provider Provider) Redirect() http.Handler {
 	// Check that we're not providing invalid scopes in.
 	scopes := strings.SplitSeq(provider.Client.Scopes, " ")
 	for scope := range scopes {
@@ -53,18 +56,26 @@ func Redirect(provider Provider) http.Handler {
 	return http.HandlerFunc(
 		func (w http.ResponseWriter, r *http.Request) {
 			// Generate random state to prevent CSRF.
-			state := randomState()
+			state, err := randomState()
+			if err != nil {
+				log.Print("Unable to generate random state token: ", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
 
 			http.SetCookie(w, &http.Cookie{
 				Name: "state",
 				Value: state,
+				HttpOnly: true,
 				SameSite: http.SameSiteLaxMode,
+				// Secure: true,
 				Path: "/",
 			})
 
 			// Redirect to OAuth provider.
 			redirect, err := url.Parse(provider.Config.AuthorizationEndpoint)
 			if err != nil {
+				log.Print("Unable to redirect to OAuth provider: ", err)
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
@@ -76,36 +87,66 @@ func Redirect(provider Provider) http.Handler {
 				Path: provider.Client.Callback,
 			}
 
+			nonce, err := randomState()
+			if err != nil {
+				log.Print("Unable to generate random nonce: ", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+
 			q := redirect.Query()
 			// Client ID is public identifier for application trying to access user's data.
 			q.Set("client_id", provider.Client.Id)
+			// todo(jc): Nonce
+			q.Set("nonce", nonce)
 			q.Set("redirect_uri", redirectUri.String())
-			q.Set("scope", provider.Client.Scopes)
 			q.Set("response_type", "code")
+			q.Set("scope", provider.Client.Scopes)
 			q.Set("state", state)
 			redirect.RawQuery = q.Encode()
 
-			log.Print(redirect.String())
+			log.Print("Redirecting to ", redirect.String())
 			http.Redirect(w, r, redirect.String(), http.StatusFound)
 		},
 	)
 }
 
-func Callback(provider Provider, callback http.Handler) http.Handler {
+func (provider Provider) Callback(callback http.Handler) http.Handler {
 	return http.HandlerFunc(
 		func (w http.ResponseWriter, r *http.Request) {
 			q := r.URL.Query()
+
+			callbackErr := q.Get("error")
+			if callbackErr == "access_denied" {
+				http.Error(w, "User denied", http.StatusConflict)
+				return
+			} else if len(callbackErr) != 0 {
+				// Not empty, some other error.
+				log.Print("OAuth callback returned error: ", callbackErr)
+				http.Error(w, callbackErr, http.StatusBadRequest)
+				return
+			}
 
 			state := q.Get("state")
 			// We use authorization code flow.
 			code := q.Get("code")
 
-			cookie, err := r.Cookie("state")
 			// Check that the cookie and state match to prevent being MITM'd.
-			if err != nil || cookie.Value != state {
+			if cookie, err := r.Cookie("state"); err != nil || cookie.Value != state {
 				w.WriteHeader(http.StatusForbidden)
 				return
 			}
+
+			// Delete the cookie.
+			http.SetCookie(w, &http.Cookie{
+				Name: "state",
+				Value: "",
+				HttpOnly: true,
+				MaxAge: -1,
+				Path: "/",
+				// Secure: true,
+				SameSite: http.SameSiteLaxMode,
+			})
 
 			// todo(jc): TLS
 			redirectUri := url.URL {
@@ -125,26 +166,32 @@ func Callback(provider Provider, callback http.Handler) http.Handler {
 				// authorization code.
 				GrantType: "authorization_code",
 			}
-			encodedRequest, err := request.Encode() 
-			if err != nil {
-				w.WriteHeader(http.StatusForbidden)
-				return
-			}
-			response, err := http.Post(
+			// Build with the request context so a client disconnect (or the
+			// server's TimeoutHandler firing) cancels the outbound exchange.
+			tokenReq, err := http.NewRequestWithContext(
+				r.Context(),
+				http.MethodPost,
 				provider.Config.TokenEndpoint,
-				"application/json",
-				encodedRequest,
+				request.Encode(),
 			)
 			if err != nil {
-				w.WriteHeader(http.StatusForbidden)
+				log.Print("Unable to build OAuth token request: ", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			response, err := httpClient.Do(tokenReq)
+			if err != nil {
+				log.Print("Error with OAuth token request: ", err)
+				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
 			defer response.Body.Close()
 
 			var tokens Tokens
-			err = json.NewDecoder(response.Body).Decode(&tokens)
-			if err != nil {
-				w.WriteHeader(http.StatusForbidden)
+			if err = json.NewDecoder(response.Body).Decode(&tokens); err != nil {
+				log.Print("Unable to decode OAuth token response: ", err)
+				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
 

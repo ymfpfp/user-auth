@@ -9,7 +9,11 @@ import (
 	"math/big"
 	"net/http"
 	"strings"
+	"time"
 )
+
+// httpClient bounds JWKS fetches so key-set retrieval can't hang forever.
+var httpClient = &http.Client{Timeout: 10 * time.Second}
 
 type AlgType string
 
@@ -152,7 +156,7 @@ func (jwt JWT) Verify(jwk JWK) (bool, error) {
 func GetJWKS(path string) (JWKS, error) {
 	var jwks JWKS
 
-	jwksResponse, err := http.Get(path)
+	jwksResponse, err := httpClient.Get(path)
 	if err != nil {
 		return jwks, err
 	}

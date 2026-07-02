@@ -34,6 +34,7 @@ func NewOIDCProvider(config Config, client Client) Provider {
 		Config: config,
 		Resolver: &OIDCResolver{
 			JWKS: jwks,
+			JWKSUri: config.JWKSUri,
 			ToVerify: OIDCVerification{
 				Audience: client.Id,
 				Issuer: config.Issuer,

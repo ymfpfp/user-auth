@@ -1,30 +1,36 @@
 package oauth
 
 import (
-	"bytes"
-	"encoding/json"
+	"net/url"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/ymfpfp/user-auth/jwt"
 )
 
 type TokenRequest struct {
-	Code string `json:"code"`
-	ClientId string `json:"client_id"`
-	ClientSecret string `json:"client_secret"`
-	RedirectUri string `json:"redirect_uri"`
-	GrantType string `json:"grant_type"`
+	Code string 
+	ClientId string 
+	ClientSecret string 
+	RedirectUri string 
+	GrantType string 
 }
 
-func (tokenRequest *TokenRequest) Encode() (*bytes.Buffer, error) {
-	buffer := new(bytes.Buffer)
-	err := json.NewEncoder(buffer).Encode(tokenRequest)
-	return buffer, err
+func (tokenRequest TokenRequest) Encode() *strings.Reader {
+	form := url.Values{}
+	form.Add("code", tokenRequest.Code)
+	form.Add("client_id", tokenRequest.ClientId)
+	form.Add("client_secret", tokenRequest.ClientSecret)
+	form.Add("redirect_uri", tokenRequest.RedirectUri)
+	form.Add("grant_type", tokenRequest.GrantType)
+	return strings.NewReader(form.Encode())
 }
 
 type Tokens struct {
 	AccessToken string `json:"access_token"`
 	IdToken string `json:"id_token"`
+	Nonce string `json:"nonce,omitempty"`
 }
 
 type Claims map[string]any
@@ -36,7 +42,13 @@ type Resolver interface {
 type OIDCResolver struct {
 	// An OIDC resolver has a JSON Web Key Set and a set of values to verify.
 	JWKS jwt.JWKS
+	// JWKSUri is where the key set is (re-)fetched from after key rotation.
+	JWKSUri string
 	ToVerify OIDCVerification
+
+	// mu guards JWKS against concurrent `Resolve` calls.
+	mu sync.RWMutex
+	lastRefresh time.Time
 }
 
 type OIDCVerification struct {
@@ -44,17 +56,15 @@ type OIDCVerification struct {
 	Issuer string
 }
 
-func (resolver OIDCResolver) Resolve(tokens Tokens) (Claims, error) {
+func (resolver *OIDCResolver) Resolve(tokens Tokens) (Claims, error) {
 	// In OIDC, we want to check that the claims are verified.
 	jwtToken, err := jwt.FromPayload(tokens.IdToken)
 	if err != nil {
 		return jwtToken.Claims, err
 	}
 
-	jwk, err := resolver.JWKS.GetJWK(jwtToken.Header.Kid) 
+	jwk, err := resolver.getJWK(jwtToken.Header.Kid)
 	if err != nil {
-		// todo(jc): If you can't find a matching JWK, it might just be that a new JWKS is
-		// available.
 		return jwtToken.Claims, err
 	}
 
@@ -73,14 +83,74 @@ func (resolver OIDCResolver) Resolve(tokens Tokens) (Claims, error) {
 		return jwtToken.Claims, jwt.InvalidJWT
 	}
 
-	if jwtToken.Claims["aud"].(string) != resolver.ToVerify.Audience {
+	if !audienceMatches(jwtToken.Claims["aud"], resolver.ToVerify.Audience) {
 		return jwtToken.Claims, jwt.InvalidJWT
 	}
 
-	if jwtToken.Claims["iss"].(string) != resolver.ToVerify.Issuer {
+	if iss, ok := jwtToken.Claims["iss"].(string); !ok || iss != resolver.ToVerify.Issuer {
 		return jwtToken.Claims, jwt.InvalidJWT
 	}
 
 	return jwtToken.Claims, nil
 }
+
+func audienceMatches(claim any, want string) bool {
+	switch aud := claim.(type) {
+	case string:
+		return aud == want
+	case []any:
+		for _, entry := range aud {
+			if s, ok := entry.(string); ok && s == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+const jwksRefreshCooldown = time.Minute
+
+func (resolver *OIDCResolver) getJWK(kid string) (jwt.JWK, error) {
+	resolver.mu.RLock()
+	jwk, err := resolver.JWKS.GetJWK(kid)
+	resolver.mu.RUnlock()
+	if err == nil {
+		return jwk, nil
+	}
+
+	// Try refreshing the JWK.
+	if refreshErr := resolver.refreshJWKS(); refreshErr != nil {
+		return jwt.JWK{}, refreshErr
+	}
+
+	resolver.mu.RLock()
+	defer resolver.mu.RUnlock()
+	// Now attempt to get the JWK after refreshing it.
+	return resolver.JWKS.GetJWK(kid)
+}
+
+// refreshJWKS re-fetches the key set, skipping the fetch if another refresh
+// already happened within the cooldown window (which also collapses concurrent
+// refreshes triggered by the same rotation).
+func (resolver *OIDCResolver) refreshJWKS() error {
+	resolver.mu.Lock()
+	defer resolver.mu.Unlock()
+
+	if !resolver.lastRefresh.IsZero() && time.Since(resolver.lastRefresh) < jwksRefreshCooldown {
+		return nil
+	}
+
+	jwks, err := jwt.GetJWKS(resolver.JWKSUri)
+	if err != nil {
+		return err
+	}
+	resolver.JWKS = jwks
+	resolver.lastRefresh = time.Now()
+	return nil
+}
+
+// todo(jc): OAuth resolver.
+type OAuthResolver struct {
+}
+
 

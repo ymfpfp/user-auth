@@ -3,11 +3,16 @@ package oauth
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 )
 
 const (
 	GoogleConfigEndpoint string = "https://accounts.google.com/.well-known/openid-configuration"
 )
+
+// httpClient is shared by all outbound OAuth/OIDC requests so they get a
+// bounded timeout instead of hanging on a slow or unresponsive provider.
+var httpClient = &http.Client{Timeout: 10 * time.Second}
 
 // This is actually part of the OIDC specification.
 type Config struct {
@@ -29,7 +34,7 @@ type Config struct {
 func GetConfig(path string) (Config, error) {
 	var config Config
 
-	configResponse, err := http.Get(path)
+	configResponse, err := httpClient.Get(path)
 	if err != nil {
 		return config, err
 	}

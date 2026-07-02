@@ -14,11 +14,19 @@ const (
 		name TEXT,
 		email TEXT
 	);
+
+	CREATE TABLE IF NOT EXISTS providers (
+		id INTEGER,
+		FOREIGN KEY (id) REFERENCES identities(id),
+		issuer STRING,
+		subject STRING,
+		(issuer, subject) PRIMARY KEY
+	);
 	`
 )
 
 func NewDb() *sql.DB {
-	db, err := sql.Open("sqlite3", ":memory:")
+	db, err := sql.Open("sqlite3", "file:test.db")
 	if err != nil {
 		log.Fatal(err)
 	}

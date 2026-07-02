@@ -3,21 +3,50 @@ package data
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"sync"
 )
 
 type Sessions struct {
-	Sessions map[string]map[string]any
+	mu sync.RWMutex
+	sessions map[string]map[string]any
 }
 
-func EmptySession() Sessions {
-	return Sessions{
-		Sessions: make(map[string]map[string]any),
+func EmptySession() *Sessions {
+	return &Sessions{
+		sessions: make(map[string]map[string]any),
 	}
 }
 
-func NewSessionId() string {
+// NewSessionId returns a cryptographically random 128-bit session id.
+func NewSessionId() (string, error) {
 	b := make([]byte, 16)
-	rand.Read(b)
-	return hex.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
+func (s *Sessions) Create(data map[string]any) (string, error) {
+	id, err := NewSessionId()
+	if err != nil {
+		return "", err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions[id] = data
+	return id, nil
+}
+
+func (s *Sessions) Get(id string) (map[string]any, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	data, ok := s.sessions[id]
+	return data, ok
+}
+
+func (s *Sessions) Delete(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.sessions, id)
+}
