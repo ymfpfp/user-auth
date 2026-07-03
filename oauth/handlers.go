@@ -67,9 +67,8 @@ func (provider Provider) Redirect() http.Handler {
 				return
 			}
 
-			// todo(jc): TLS
 			redirectUri := url.URL {
-				Scheme: "http",
+				Scheme: "https",
 				Host: r.Host,
 				Path: provider.Client.Callback,
 			}
@@ -135,9 +134,8 @@ func (provider Provider) Callback(callback http.Handler) http.Handler {
 				SameSite: http.SameSiteLaxMode,
 			})
 
-			// todo(jc): TLS
 			redirectUri := url.URL {
-				Scheme: "http",
+				Scheme: "https",
 				Host: r.Host,
 				Path: provider.Client.Callback,
 			}
@@ -166,6 +164,7 @@ func (provider Provider) Callback(callback http.Handler) http.Handler {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
+			tokenReq.Header.Set("Accept", "application/json")
 			tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			response, err := httpClient.Do(tokenReq)
 			if err != nil {
@@ -181,6 +180,8 @@ func (provider Provider) Callback(callback http.Handler) http.Handler {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
+
+			// todo(jc): PKCE.
 
 			ctx := r.Context()
 

@@ -91,7 +91,7 @@ type OIDCVerification struct {
 }
 
 func (resolver *OIDCResolver) Resolve(tokens Tokens, ctx context.Context) (context.Context, error) {
-	// In OIDC, we want to check that the claims are verified.
+	// For OIDC, we want to check that the claims are verified.
 	jwtToken, err := jwt.FromToken(tokens.IdToken)
 	if err != nil {
 		return ctx, err
@@ -175,8 +175,10 @@ func (resolver *OIDCResolver) refreshJWKS() error {
 	return nil
 }
 
-// todo(jc): OAuth resolver.
-type OAuthResolver struct {
-}
+// This does absolutely nothing - you write a custom resolver. 
+type OAuthResolver struct {}
 
+func (resolver *OAuthResolver) Resolve(tokens Tokens, ctx context.Context) (context.Context, error) {
+	return ctx, nil
+}
 

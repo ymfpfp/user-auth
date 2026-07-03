@@ -23,11 +23,14 @@ type Config struct {
 	TokenEndpoint string `json:"token_endpoint,omitempty"`
 	JWKSUri string `json:"jwks_uri,omitempty"`
 	// Subject types are unique identification types for users.
+	// todo(jc): Do we need this?
 	SubjectTypesSupported []string `json:"subject_types_supported"`
 	ResponseTypesSupported []string `json:"response_types_supported"`
+	// todo(jc): Do we need this?
 	IdTokenSigningAlgValuesSupported []string `json:"id_token_signing_alg_values_supported"`
 	// Support scopes.
 	ScopesSupported []string `json:"scopes_supported"`
+	// todo(jc): Do we need this?
 	ClaimsSupported []string `json:"claims_supported"`
 }
 

@@ -15,6 +15,16 @@ const (
 		email TEXT
 	);
 
+	CREATE TABLE IF NOT EXISTS providers (
+		identity_id INTEGER,
+		issuer TEXT NOT NULL,
+		subject TEXT NOT NULL,
+		FOREIGN KEY (identity_id) REFERENCES identities(id),
+		PRIMARY KEY (issuer, subject)
+	);
+
+	CREATE INDEX IF NOT EXISTS user_providers ON providers(identity_id);
+
 	CREATE TABLE IF NOT EXISTS sessions (
 		id TEXT PRIMARY KEY,
 		identity_id INTEGER NOT NULL,
@@ -26,16 +36,6 @@ const (
 	);
 
 	CREATE INDEX IF NOT EXISTS user_sessions ON sessions(identity_id);
-
-	CREATE TABLE IF NOT EXISTS providers (
-		identity_id INTEGER,
-		issuer TEXT NOT NULL,
-		subject TEXT NOT NULL,
-		FOREIGN KEY (identity_id) REFERENCES identities(id),
-		PRIMARY KEY (issuer, subject)
-	);
-
-	CREATE INDEX IF NOT EXISTS user_providers ON providers(identity_id);
 
 	CREATE TABLE IF NOT EXISTS activities (
 		id INTEGER PRIMARY KEY,

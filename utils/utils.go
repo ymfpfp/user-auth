@@ -1,6 +1,9 @@
 package utils
 
-import "net/http"
+import (
+	"io"
+	"net/http"
+)
 
 func ClearCookies(w http.ResponseWriter, r *http.Request) {
 	for _, cookie := range r.Cookies() {
@@ -14,6 +17,15 @@ func ClearCookies(w http.ResponseWriter, r *http.Request) {
 			SameSite: http.SameSiteLaxMode,
 		})
 	}
+}
+
+// Caller is responsible for draining `r`.
+func DrainReadCloser(r io.ReadCloser) (string, error) {
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
 
 func Get[T any](m map[string]any, key string) (T, bool) {

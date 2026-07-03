@@ -26,6 +26,8 @@ type Config struct {
 	GithubClientSecret string
 
 	Port string
+
+	RootKey string
 }
 
 type Handler struct {
@@ -144,15 +146,40 @@ func main() {
 		},
 	)))
 
-	// githubConfig := oauth.Config{
-	// 	AuthorizationEndpoint: "https://github.com/login/oauth/authorize",
-	// }
-	// githubClient := oauth.Client{
-	// 	Callback: "/oauth2/github",
-	// 	Id: config.GithubClientId,
-	// 	Scopes: "profile",
-	// 	Secret: config.GithubClientSecret,
-	// }
+	// In typical OAuth libraries, these are pre-filled properly for you;
+	// here we'll fill them just with what we need.
+	//
+	// GitHub access tokens are long-lived. Typical OAuth apps will have get a
+	// refresh token to maintain longevity.
+	githubConfig := oauth.Config{
+		Issuer: "GitHub",
+		AuthorizationEndpoint: "https://github.com/login/oauth/authorize",
+		TokenEndpoint: "https://github.com/login/oauth/access_token",
+		ResponseTypesSupported: []string{"code"},
+		ScopesSupported: []string{"repo"},
+	}
+	githubClient := oauth.Client{
+		Callback: "/oauth2/github",
+		Id: config.GithubClientId,
+		Scopes: "repo",
+		Secret: config.GithubClientSecret,
+	}
+	githubProvider := oauth.NewOAuthProvider(githubConfig, githubClient)
+	serveMux.Handle("/connect/github", h.Authenticated(githubProvider.Redirect()))
+	serveMux.Handle("/oauth2/github", h.Authenticated(githubProvider.Callback(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			ctx := r.Context()
+			tokens, ok := oauth.TokensFromContext(ctx)
+			if !ok {
+				w.WriteHeader(http.StatusInternalServerError)
+			}
+
+			// Use token to grab GitHub repos.
+			log.Print(tokens)
+
+			w.Write([]byte("wip"))
+		},
+	))))
 
 	mux := DrainAndClose(serveMux)
 
@@ -173,7 +200,9 @@ func main() {
 	}
 
 	log.Print("Listening on ", server.Addr)
-	err = server.Serve(listener)
+	// To serve over TLS, need a trusted signed cert file and a private key.
+	// Generate local test one with mkcert, openssl, etc. 
+	err = server.ServeTLS(listener, "cert.pem", "private.pem")
 	if err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
@@ -204,6 +233,11 @@ var htmlTemplates = template.Must(
 					<p>{{.Action}} on {{.Created | date}}</p>
 				{{else}}
 					<p>No recent activity.</p>
+				{{end}}
+				<p>
+				{{if .Repos}}
+				{{else}}
+					<p><a href="/connect/github">Connect GitHub</a></p>
 				{{end}}
 				<p><a href="/logout">Log out</a></p>
 			</body>

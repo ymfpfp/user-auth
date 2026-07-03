@@ -42,3 +42,11 @@ func NewOIDCProvider(config Config, client Client) Provider {
 		},
 	}
 }
+
+func NewOAuthProvider(config Config, client Client) Provider {
+	return Provider{
+		Client: client,
+		Config: config,
+		Resolver: &OAuthResolver{},
+	}
+}
