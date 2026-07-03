@@ -28,6 +28,41 @@ func (h Handler) CreateIdentity(name, email string) (int64, error) {
 	return result.LastInsertId()
 }
 
+// Attach the provider to the identity without triggering.
+func (h Handler) LinkProvider(identityId int64, issuer, subject string) error {
+	_, err := h.db.Exec(
+		`INSERT INTO providers (identity_id, issuer, subject) VALUES (?, ?, ?)
+		 ON CONFLICT (issuer, subject) DO NOTHING`,
+		identityId, issuer, subject,
+	)
+	return err
+}
+
+// Atomic transaction for creating identity with provider
+func (h Handler) CreateIdentityWithProvider(issuer, subject, name, email string) (int64, error) {
+	tx, err := h.db.Begin()
+	if err != nil {
+		return -1, err
+	}
+	defer tx.Rollback()
+
+	result, err := tx.Exec("INSERT INTO identities (name, email) VALUES (?, ?)", name, email)
+	if err != nil {
+		return -1, err
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return -1, err
+	}
+	if _, err := tx.Exec(
+		"INSERT INTO providers (identity_id, issuer, subject) VALUES (?, ?, ?)",
+		id, issuer, subject,
+	); err != nil {
+		return 0, err
+	}
+	return id, tx.Commit()
+}
+
 func (h Handler) CreateSession(identityId int64, ip, device string, ttl time.Duration) (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
@@ -106,39 +141,44 @@ func (h Handler) GetActiveSessions(identityId int64) ([]data.Session, error) {
 	return sessions, rows.Err()
 }
 
-// Attach the provider to the identity without triggering.
-func (h Handler) LinkProvider(identityId int64, issuer, subject string) error {
+func (h Handler) RecordActivity(identityId int64, action string) error {
 	_, err := h.db.Exec(
-		`INSERT INTO providers (identity_id, issuer, subject) VALUES (?, ?, ?)
-		 ON CONFLICT (issuer, subject) DO NOTHING`,
-		identityId, issuer, subject,
+		"INSERT INTO activities (identity_id, action, created) VALUES (?, ?, ?)",
+		identityId, action, time.Now().Unix(),
 	)
 	return err
 }
 
-// Atomic transaction for creating identity with provider
-func (h Handler) CreateIdentityWithProvider(issuer, subject, name, email string) (int64, error) {
-	tx, err := h.db.Begin()
-	if err != nil {
-		return -1, err
-	}
-	defer tx.Rollback()
+func (h Handler) GetRecentActivities(identityId int64, limit int) ([]data.Activity, error) {
+	var activities []data.Activity
 
-	result, err := tx.Exec("INSERT INTO identities (name, email) VALUES (?, ?)", name, email)
+	rows, err := h.db.Query(
+		`SELECT id, identity_id, action, created
+		 FROM activities
+		 WHERE identity_id = ?
+		 ORDER BY created DESC
+		 LIMIT ?`,
+		identityId, limit,
+	)
 	if err != nil {
-		return -1, err
+		return activities, err
 	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		return -1, err
+	defer rows.Close()
+
+	for rows.Next() {
+		var activity data.Activity
+		if err := rows.Scan(
+			&activity.Id,
+			&activity.IdentityId,
+			&activity.Action,
+			&activity.Created,
+		); err != nil {
+			return activities, err
+		}
+		activities = append(activities, activity)
 	}
-	if _, err := tx.Exec(
-		"INSERT INTO providers (identity_id, issuer, subject) VALUES (?, ?, ?)",
-		id, issuer, subject,
-	); err != nil {
-		return 0, err
-	}
-	return id, tx.Commit()
+
+	return activities, rows.Err()
 }
 
 func (h Handler) UpsertLogin(issuer, subject, name, email string) (int64, bool, error) {

@@ -128,6 +128,10 @@ func main() {
 				return
 			}
 
+			if err := h.RecordActivity(id, "Logged in via Google from " + ip); err != nil {
+				log.Print(err)
+			}
+
 			// Return session cookie.
 			http.SetCookie(w, &http.Cookie{
 				Name: "session",
@@ -195,6 +199,12 @@ var htmlTemplates = template.Must(
 					<p>Expires on {{.ExpiresAt | date}}<p>
 					<hr>
 				{{end}}
+				<h2>Recent Activity</h2>
+				{{range .Activities}}
+					<p>{{.Action}} on {{.Created | date}}</p>
+				{{else}}
+					<p>No recent activity.</p>
+				{{end}}
 				<p><a href="/logout">Log out</a></p>
 			</body>
 		</html>
@@ -233,12 +243,16 @@ func (h *Handler) loggedIn(w http.ResponseWriter, r *http.Request) {
 
 	// Get active sessions.
 	sessions, _ := h.GetActiveSessions(activeSession.IdentityId)
-	
+
+	// Get recent activity.
+	activities, _ := h.GetRecentActivities(activeSession.IdentityId, 10)
+
 	err := htmlTemplates.ExecuteTemplate(w, "loggedIn", map[string]any{
 		"Name": activeSession.Name,
 		"Email": activeSession.Email,
 		"Sessions": sessions,
-	}) 
+		"Activities": activities,
+	})
 	if err != nil {
 		log.Print(err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -253,6 +267,10 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 	}
 	
 	h.RevokeSession(activeSession.Id)
+
+	if err := h.RecordActivity(activeSession.IdentityId, "Logged out"); err != nil {
+		log.Print(err)
+	}
 
 	utils.ClearCookies(w, r)
 	http.Redirect(w, r, "/", http.StatusFound)

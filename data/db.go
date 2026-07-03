@@ -59,6 +59,13 @@ type Session struct {
 	ExpiresAt int64
 }
 
+type Activity struct {
+	Id int64
+	IdentityId int64
+	Action string
+	Created int64
+}
+
 func NewDb() *sql.DB {
 	db, err := sql.Open("sqlite3", "file:test.db")
 	if err != nil {
