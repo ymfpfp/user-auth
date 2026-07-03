@@ -8,22 +8,9 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
-
-	utils "github.com/ymfpfp/user-auth/utils"
 )
-
-type contextKey string
-
-const (
-	claimsKey contextKey = "claims"
-	tokensKey contextKey = "tokens"
-)
-
-func ClaimsFromContext (ctx context.Context) (Claims, bool) {
-	claims, ok := ctx.Value(claimsKey).(Claims)
-	return claims, ok
-}
 
 func TokensFromContext (ctx context.Context) (Tokens, bool) {
 	tokens, ok := ctx.Value(tokensKey).(Tokens)
@@ -43,13 +30,13 @@ func (provider Provider) Redirect() http.Handler {
 	// Check that we're not providing invalid scopes in.
 	scopes := strings.SplitSeq(provider.Client.Scopes, " ")
 	for scope := range scopes {
-		if !utils.Contains(provider.Config.ScopesSupported, scope) {
+		if !slices.Contains(provider.Config.ScopesSupported, scope) {
 			log.Fatalf("Unsupported scope %s given provider %s", scope, provider.Config.Issuer)
 	 	}
 	}
 
 	// Prefer the modern authorization code flow.
-	if !utils.Contains(provider.Config.ResponseTypesSupported, "code") {
+	if !slices.Contains(provider.Config.ResponseTypesSupported, "code") {
 		log.Fatalf("Provider %s does not support authorization code flow", provider.Config.Issuer)
 	}
 
@@ -195,18 +182,18 @@ func (provider Provider) Callback(callback http.Handler) http.Handler {
 				return
 			}
 
+			ctx := r.Context()
+
 			// At this point, we have the token response. It is up to the resolver to 
-			// check that the token is valid and maybe return some info (`claims` generalized). 
-			claims, err := provider.Resolver.Resolve(tokens)	
+			// check that the token is valid and maybe inject some info into context.
+			ctx, err = provider.Resolver.Resolve(tokens, ctx)
 			if err != nil {
 				w.WriteHeader(http.StatusForbidden)
 				return
 			}
 
-			// Inject into context, and then trigger callback, this is designed to be used as
+			// Inject token into context, and then trigger callback, this is designed to be used as
 			// middleware.
-			ctx := r.Context()
-			ctx = context.WithValue(ctx, claimsKey, claims)
 			ctx = context.WithValue(ctx, tokensKey, tokens)
 
 			callback.ServeHTTP(w, r.WithContext(ctx))

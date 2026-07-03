@@ -3,8 +3,8 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+
 	// "html/template"
-	"io"
 	"log"
 	"net"
 	"net/http"
@@ -15,6 +15,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/ymfpfp/user-auth/data"
 	"github.com/ymfpfp/user-auth/oauth"
+	"github.com/ymfpfp/user-auth/utils"
 )
 
 type Config struct {
@@ -30,7 +31,6 @@ type Config struct {
 type Handler struct {
 	db *sql.DB
 	config *Config
-	sessions *data.Sessions
 }
 
 func main() {
@@ -62,7 +62,6 @@ func main() {
 	h := &Handler{
 		db: db,
 		config: &config,
-		sessions: data.EmptySession(),
 	}
 	_ = h
 
@@ -70,6 +69,7 @@ func main() {
 	serveMux := http.NewServeMux()
 
 	serveMux.HandleFunc("/", index)
+	serveMux.HandleFunc("/logout", h.logout)
 
 	googleConfig, err := oauth.GetConfig(oauth.GoogleConfigEndpoint)
 	if err != nil {
@@ -91,23 +91,32 @@ func main() {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
+
+			// Upsert user and provider.
+			name, ok := utils.Get[string](claims.Raw, "name")
+			log.Print(name)
+
+			// Create a new session.
+
+			// Return session cookie.
+
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode(claims)
 		},
 	)))
 
-	githubConfig := oauth.Config{
-		AuthorizationEndpoint: "https://github.com/login/oauth/authorize",
-	}
-	githubClient := oauth.Client{
-		Callback: "/oauth2/github",
-		Id: config.GithubClientId,
-		Scopes: "profile",
-		Secret: config.GithubClientSecret,
-	}
+	// githubConfig := oauth.Config{
+	// 	AuthorizationEndpoint: "https://github.com/login/oauth/authorize",
+	// }
+	// githubClient := oauth.Client{
+	// 	Callback: "/oauth2/github",
+	// 	Id: config.GithubClientId,
+	// 	Scopes: "profile",
+	// 	Secret: config.GithubClientSecret,
+	// }
 
-	mux := drainAndClose(serveMux)
+	mux := DrainAndClose(serveMux)
 
 	server := &http.Server{
 		Addr: "127.0.0.1:" + config.Port,
@@ -132,16 +141,6 @@ func main() {
 	}
 }
 
-func drainAndClose(next http.Handler) http.Handler {
-	return http.HandlerFunc(
-		func(w http.ResponseWriter, r *http.Request) {
-			next.ServeHTTP(w, r)
-			_, _ = io.Copy(io.Discard, r.Body)
-			_ = r.Body.Close()
-		},
-	)
-}
-
 func index(w http.ResponseWriter, r *http.Request) {
 	html := `
 	<!doctype html>
@@ -158,3 +157,34 @@ func index(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(html))
 }
 
+func (h *Handler) loggedIn(w http.ResponseWriter, r *http.Request) {
+	html := `
+	<!doctype html>
+	<html>
+		<head></head>
+		<body>
+			<p>Logged in!</p>
+			<p><a href="/logout">Log out</a></p>
+		</body>
+	</html>
+	`
+
+	w.Write([]byte(html))
+}
+
+func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
+	// todo(jc): Clear matching session.
+	// Clear all cookies.
+	for _, cookie := range r.Cookies() {
+		http.SetCookie(w, &http.Cookie{
+			Name: cookie.Name,
+			Value: "",
+			HttpOnly: true,
+			MaxAge: -1,
+			Path: "/",
+			// Secure: true,
+			SameSite: http.SameSiteLaxMode,
+		})
+	}
+	http.Redirect(w, r, "/", http.StatusFound)
+}

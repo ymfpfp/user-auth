@@ -29,8 +29,9 @@ type JWTHeader struct {
 
 type JWT struct {
 	Header JWTHeader
-	Claims map[string]any
 	Payload []byte
+	// Combined `{Header}.{Payload}` as bytes.
+	Input []byte
 	Signature []byte
 }
 
@@ -72,17 +73,17 @@ func (err JWKSError) Error() string {
 	return string(err)
 }
 
-func FromPayload(payload string) (JWT, error) {
+func FromToken(token string) (JWT, error) {
 	var jwt JWT
 
-	parts := strings.Split(payload, ".")
+	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return jwt, InvalidJWT
 	}
 	encodedHeader := parts[0]
-	encodedClaims := parts[1]
+	encodedPayload := parts[1]
 	encodedSignature := parts[2]
-	jwt.Payload = []byte(encodedHeader + "." + encodedClaims)
+	jwt.Input = []byte(encodedHeader + "." + encodedPayload)
 
 	decodedHeader, err := base64.RawURLEncoding.DecodeString(encodedHeader)
 	if err != nil {
@@ -93,11 +94,7 @@ func FromPayload(payload string) (JWT, error) {
 		return jwt, err
 	}
 
-	decodedClaims, err := base64.RawURLEncoding.DecodeString(encodedClaims)
-	if err != nil {
-		return jwt, err
-	}
-	err = json.Unmarshal(decodedClaims, &jwt.Claims)
+	jwt.Payload, err = base64.RawURLEncoding.DecodeString(encodedPayload)
 	if err != nil {
 		return jwt, err
 	}
@@ -130,7 +127,7 @@ func (jwt JWT) verifyRSA(jwk JWK) (bool, error) {
 	switch jwk.Alg {
 	case RS256:
 		hash = crypto.SHA256
-		bytes := sha256.Sum256(jwt.Payload)
+		bytes := sha256.Sum256(jwt.Input)
 		hashed = bytes[:]
 	default:
 		return false, UnsupportedJWT

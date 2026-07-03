@@ -1,7 +1,10 @@
 package oauth
 
 import (
+	"context"
+	"encoding/json"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -33,10 +36,41 @@ type Tokens struct {
 	Nonce string `json:"nonce,omitempty"`
 }
 
-type Claims map[string]any
+type OIDCAudience []string
+
+func (aud *OIDCAudience) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		*aud = OIDCAudience{s}
+		return nil
+	}
+
+	var arr []string
+	if err := json.Unmarshal(data, &arr); err == nil {
+		*aud = OIDCAudience(arr)
+		return nil
+	}
+
+	return jwt.InvalidJWT
+}
+
+type OIDCClaims struct {
+	Audience OIDCAudience `json:"aud"`
+	Issuer string `json:"iss"`
+	Subject string `json:"sub"`
+	ExpiresAt float64 `json:"exp"`
+	Nonce string `json:"nonce"`
+	// Other claims.
+	Raw map[string]any `json:"-"`
+}
+
+func ClaimsFromContext(ctx context.Context) (OIDCClaims, bool) {
+	claims, ok := ctx.Value(claimsKey).(OIDCClaims)
+	return claims, ok
+}
 
 type Resolver interface {
-	Resolve(tokens Tokens) (Claims, error)
+	Resolve(tokens Tokens, ctx context.Context) (context.Context, error)
 }
 
 type OIDCResolver struct {
@@ -56,56 +90,48 @@ type OIDCVerification struct {
 	Issuer string
 }
 
-func (resolver *OIDCResolver) Resolve(tokens Tokens) (Claims, error) {
+func (resolver *OIDCResolver) Resolve(tokens Tokens, ctx context.Context) (context.Context, error) {
 	// In OIDC, we want to check that the claims are verified.
-	jwtToken, err := jwt.FromPayload(tokens.IdToken)
+	jwtToken, err := jwt.FromToken(tokens.IdToken)
 	if err != nil {
-		return jwtToken.Claims, err
+		return ctx, err
 	}
 
 	jwk, err := resolver.getJWK(jwtToken.Header.Kid)
 	if err != nil {
-		return jwtToken.Claims, err
+		return ctx, err
 	}
 
 	verified, err := jwtToken.Verify(jwk) 
-	if verified == false || err != nil {
-		return jwtToken.Claims, err
+	if verified == false {
+		return ctx, jwt.InvalidJWT
+	} else if err != nil {
+		return ctx, jwt.InvalidJWT
+	}
+
+	// Now we can construct a typed set of claims.
+	var claims OIDCClaims
+	if err = json.Unmarshal(jwtToken.Payload, &claims); err != nil {
+		return ctx, err
+	}
+	// Directly unload all claims.
+	if err = json.Unmarshal(jwtToken.Payload, &claims.Raw); err != nil {
+		return ctx, err
 	}
 
 	// In addition to verifying the signature, we also need to verify: 
 	// * `aud`. Short for audience, basically is this token meant for this client?
 	// * `exp`. Short for expiration, check that the token is still valid.
 	// * `iss`. Short for issuer, basically was this token issued by who we expected?
-	
-	exp, ok := jwtToken.Claims["exp"].(float64)
-	if !ok || time.Now().Unix() >= int64(exp) {
-		return jwtToken.Claims, jwt.InvalidJWT
+
+	if time.Now().Unix() >= int64(claims.ExpiresAt) ||
+		 !slices.Contains(claims.Audience, resolver.ToVerify.Audience) ||
+		 claims.Issuer != resolver.ToVerify.Issuer {
+		return ctx, jwt.InvalidJWT
 	}
 
-	if !audienceMatches(jwtToken.Claims["aud"], resolver.ToVerify.Audience) {
-		return jwtToken.Claims, jwt.InvalidJWT
-	}
-
-	if iss, ok := jwtToken.Claims["iss"].(string); !ok || iss != resolver.ToVerify.Issuer {
-		return jwtToken.Claims, jwt.InvalidJWT
-	}
-
-	return jwtToken.Claims, nil
-}
-
-func audienceMatches(claim any, want string) bool {
-	switch aud := claim.(type) {
-	case string:
-		return aud == want
-	case []any:
-		for _, entry := range aud {
-			if s, ok := entry.(string); ok && s == want {
-				return true
-			}
-		}
-	}
-	return false
+	// Inject claims into the context.
+	return context.WithValue(ctx, claimsKey, claims), nil
 }
 
 const jwksRefreshCooldown = time.Minute

@@ -10,20 +10,44 @@ import (
 const (
 	INITIAL = `
 	CREATE TABLE IF NOT EXISTS identities (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		id INTEGER PRIMARY KEY,
 		name TEXT,
 		email TEXT
 	);
 
+	CREATE TABLE IF NOT EXISTS sessions (
+		id TEXT PRIMARY KEY,
+		identity_id INTEGER NOT NULL,
+		ip_address STRING,
+		created INTEGER NOT NULL,
+		expires_at INTEGER NOT NULL,
+		FOREIGN KEY (identity_id) REFERENCES identities(id)
+	);
+
+	CREATE INDEX IF NOT EXISTS user_sessions ON sessions(identity_id);
+
 	CREATE TABLE IF NOT EXISTS providers (
-		id INTEGER,
-		FOREIGN KEY (id) REFERENCES identities(id),
-		issuer STRING,
-		subject STRING,
-		(issuer, subject) PRIMARY KEY
+		identity_id INTEGER,
+		issuer TEXT NOT NULL,
+		subject TEXT NOT NULL,
+		FOREIGN KEY (identity_id) REFERENCES identities(id),
+		PRIMARY KEY (issuer, subject)
+	);
+
+	CREATE INDEX IF NOT EXISTS user_providers ON providers(identity_id);
+
+	CREATE TABLE IF NOT EXISTS activities (
+		id INTEGER PRIMARY KEY,
+		identity_id INTEGER NOT NULL,
+		action STRING NOT NULL,
+		created INTEGER NOT NULL, 
+		FOREIGN KEY (identity_id) REFERENCES identities(id)
 	);
 	`
 )
+
+type Session struct {
+}
 
 func NewDb() *sql.DB {
 	db, err := sql.Open("sqlite3", "file:test.db")
