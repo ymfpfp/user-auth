@@ -7,7 +7,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"time"
-	// "github.com/ymfpfp/data"
+
+	"github.com/ymfpfp/user-auth/data"
 )
 
 // Tiny helper function to encode tokens at rest.
@@ -27,7 +28,7 @@ func (h Handler) CreateIdentity(name, email string) (int64, error) {
 	return result.LastInsertId()
 }
 
-func (h Handler) CreateSession(identityId int64, ip string, ttl time.Duration) (string, error) {
+func (h Handler) CreateSession(identityId int64, ip, device string, ttl time.Duration) (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
@@ -36,14 +37,39 @@ func (h Handler) CreateSession(identityId int64, ip string, ttl time.Duration) (
 
 	now := time.Now().Unix()
 	_, err := h.db.Exec(
-		`INSERT INTO sessions (id, identity_id, ip_address, created, expiees_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		hashToken(token), identityId, ip, now, now + int64(ttl.Seconds()),
+		`INSERT INTO sessions (id, identity_id, ip_address, device, created, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		hashToken(token), identityId, ip, device, now, now + int64(ttl.Seconds()),
 	)
 	if err != nil {
 		return "", err
 	}
 	return token, nil
+}
+
+func (h Handler) GetSession(sessionId string) (data.Session, error) {
+	var session data.Session
+	err := h.db.QueryRow(
+		`SELECT s.id, i.name, i.email, s.identity_id, s.ip_address, s.device, s.created, s.expires_at
+		 FROM sessions s
+		 JOIN identities i ON i.id = s.identity_id
+		 WHERE s.id = ?`,
+		hashToken(sessionId),
+	).Scan(
+		&session.Id,
+		&session.Name,
+		&session.Email,
+		&session.IdentityId,
+		&session.IpAddr,
+		&session.Device,
+		&session.Created,
+		&session.ExpiresAt,
+	)
+	if err != nil {
+		return session, err
+	}
+	session.Id = sessionId
+	return session, nil
 }
 
 func (h Handler) RevokeSession(sessionId string) error {
@@ -52,9 +78,33 @@ func (h Handler) RevokeSession(sessionId string) error {
 	return err
 }
 
-// func (h Handler) GetActiveSessions(identityId int64) ([]data.Session, error) {
-//
-// }
+func (h Handler) GetActiveSessions(identityId int64) ([]data.Session, error) {
+	var sessions []data.Session
+
+	rows, err := h.db.Query("SELECT * FROM sessions WHERE identity_id = ?", identityId)
+	if err != nil {
+		return sessions, nil
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var session data.Session
+		err := rows.Scan(
+			&session.Id, 
+			&session.IdentityId, 
+			&session.IpAddr, 
+			&session.Device, 
+			&session.Created, 
+			&session.ExpiresAt,
+		)
+		if err != nil {
+			return sessions, nil
+		}
+		sessions = append(sessions, session)
+	}
+
+	return sessions, rows.Err()
+}
 
 // Attach the provider to the identity without triggering.
 func (h Handler) LinkProvider(identityId int64, issuer, subject string) error {

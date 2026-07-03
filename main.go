@@ -2,7 +2,7 @@ package main
 
 import (
 	"database/sql"
-	"encoding/json"
+	"html/template"
 
 	// "html/template"
 	"log"
@@ -69,7 +69,8 @@ func main() {
 	serveMux := http.NewServeMux()
 
 	serveMux.HandleFunc("/", index)
-	serveMux.HandleFunc("/logout", h.logout)
+	serveMux.Handle("/loggedIn", h.Authenticated(http.HandlerFunc(h.loggedIn)))
+	serveMux.Handle("/logout", h.Authenticated(http.HandlerFunc(h.logout)))
 
 	googleConfig, err := oauth.GetConfig(oauth.GoogleConfigEndpoint)
 	if err != nil {
@@ -94,15 +95,48 @@ func main() {
 
 			// Upsert user and provider.
 			name, ok := utils.Get[string](claims.Raw, "name")
-			log.Print(name)
+			if !ok {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+
+			email, ok := utils.Get[string](claims.Raw, "email")
+			if !ok {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+
+			id, _, err := h.UpsertLogin(claims.Issuer, claims.Subject, name, email)
+			if id < 0 {
+				log.Print(err)
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
 
 			// Create a new session.
+			// Get device and IP addr.
+			device := r.UserAgent()
+			ip, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil {
+				ip = r.RemoteAddr
+			}
+		
+			session, err := h.CreateSession(id, ip, device, time.Hour * 24 * 7)
+			if err != nil {
+				log.Print(err)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
 
 			// Return session cookie.
+			http.SetCookie(w, &http.Cookie{
+				Name: "session",
+				Value: session,
+				HttpOnly: true,
+				Path: "/",
+			})
 
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(claims)
+			http.Redirect(w, r, "/loggedIn", http.StatusFound)
 		},
 	)))
 
@@ -141,7 +175,40 @@ func main() {
 	}
 }
 
+var htmlTemplates = template.Must(
+	template.New("loggedIn").Funcs(template.FuncMap{
+		"date": func(ts int64) string {
+			return time.Unix(ts, 0).Format("Jan 2, 2006 3:04 PM MST")
+		},
+	}).Parse(`
+		<!doctype html>
+		<html>
+			<head></head>
+			<body>
+				<p>Logged in as {{.Name}} at {{.Email}}!</p>
+				<h2>Active Sessions</h2>
+				{{range .Sessions}}
+					<hr>
+					<p>{{.IpAddr}}</p>
+					<p>{{.Device}}</p>
+					<p>Signed in on {{.Created | date}}</p>
+					<p>Expires on {{.ExpiresAt | date}}<p>
+					<hr>
+				{{end}}
+				<p><a href="/logout">Log out</a></p>
+			</body>
+		</html>
+	`),
+)
+
 func index(w http.ResponseWriter, r *http.Request) {
+	_, err := r.Cookie("session")
+	if err == nil {
+		// Try redirecting to /loggedIn, where the authentication middleware will run.
+		http.Redirect(w, r, "/loggedIn", http.StatusSeeOther)
+		return
+	}
+
 	html := `
 	<!doctype html>
 	<html>
@@ -158,33 +225,35 @@ func index(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) loggedIn(w http.ResponseWriter, r *http.Request) {
-	html := `
-	<!doctype html>
-	<html>
-		<head></head>
-		<body>
-			<p>Logged in!</p>
-			<p><a href="/logout">Log out</a></p>
-		</body>
-	</html>
-	`
+	activeSession, ok := SessionFromContext(r.Context())
+	if !ok {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
 
-	w.Write([]byte(html))
+	// Get active sessions.
+	sessions, _ := h.GetActiveSessions(activeSession.IdentityId)
+	
+	err := htmlTemplates.ExecuteTemplate(w, "loggedIn", map[string]any{
+		"Name": activeSession.Name,
+		"Email": activeSession.Email,
+		"Sessions": sessions,
+	}) 
+	if err != nil {
+		log.Print(err)
+		w.WriteHeader(http.StatusInternalServerError)
+	}
 }
 
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
-	// todo(jc): Clear matching session.
-	// Clear all cookies.
-	for _, cookie := range r.Cookies() {
-		http.SetCookie(w, &http.Cookie{
-			Name: cookie.Name,
-			Value: "",
-			HttpOnly: true,
-			MaxAge: -1,
-			Path: "/",
-			// Secure: true,
-			SameSite: http.SameSiteLaxMode,
-		})
+	activeSession, ok := SessionFromContext(r.Context())
+	if !ok {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
 	}
+	
+	h.RevokeSession(activeSession.Id)
+
+	utils.ClearCookies(w, r)
 	http.Redirect(w, r, "/", http.StatusFound)
 }

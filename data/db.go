@@ -19,6 +19,7 @@ const (
 		id TEXT PRIMARY KEY,
 		identity_id INTEGER NOT NULL,
 		ip_address STRING,
+		device STRING,
 		created INTEGER NOT NULL,
 		expires_at INTEGER NOT NULL,
 		FOREIGN KEY (identity_id) REFERENCES identities(id)
@@ -47,6 +48,15 @@ const (
 )
 
 type Session struct {
+	Id string
+	Name string
+	Email string
+
+	IdentityId int64
+	IpAddr string
+	Device string
+	Created int64
+	ExpiresAt int64
 }
 
 func NewDb() *sql.DB {
