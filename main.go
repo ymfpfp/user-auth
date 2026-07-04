@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/hex"
 	"html/template"
 
 	// "html/template"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/joho/godotenv"
 	"github.com/ymfpfp/user-auth/data"
+	"github.com/ymfpfp/user-auth/github"
 	"github.com/ymfpfp/user-auth/oauth"
 	"github.com/ymfpfp/user-auth/utils"
 )
@@ -27,7 +29,7 @@ type Config struct {
 
 	Port string
 
-	RootKey string
+	RootKey []byte
 }
 
 type Handler struct {
@@ -48,6 +50,11 @@ func main() {
 		}
 	}
 
+	rootKey, err := hex.DecodeString(os.Getenv("ROOT_KEY"))
+	if err != nil {
+		log.Fatal("Invalid ROOT_KEY: ", err)
+	}
+
 	config := Config {
 		GoogleClientId: os.Getenv("GOOGLE_CLIENT_ID"),
 		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
@@ -56,6 +63,8 @@ func main() {
 		GithubClientSecret: os.Getenv("GITHUB_CLIENT_SECRET"),
 
 		Port: port,
+
+		RootKey: rootKey,
 	}
 
 	db := data.NewDb()
@@ -96,19 +105,7 @@ func main() {
 			}
 
 			// Upsert user and provider.
-			name, ok := utils.Get[string](claims.Raw, "name")
-			if !ok {
-				w.WriteHeader(http.StatusForbidden)
-				return
-			}
-
-			email, ok := utils.Get[string](claims.Raw, "email")
-			if !ok {
-				w.WriteHeader(http.StatusForbidden)
-				return
-			}
-
-			id, _, err := h.UpsertLogin(claims.Issuer, claims.Subject, name, email)
+			id, _, err := h.UpsertLoginFromClaims(claims)
 			if id < 0 {
 				log.Print(err)
 				w.WriteHeader(http.StatusForbidden)
@@ -150,41 +147,62 @@ func main() {
 	// here we'll fill them just with what we need.
 	//
 	// GitHub access tokens are long-lived. Typical OAuth apps will have get a
-	// refresh token to maintain longevity.
+	// refresh token to maintain longevity; in that case, we'd also store a refresh token in 
+	// the db.
 	githubConfig := oauth.Config{
 		Issuer: "GitHub",
 		AuthorizationEndpoint: "https://github.com/login/oauth/authorize",
 		TokenEndpoint: "https://github.com/login/oauth/access_token",
 		ResponseTypesSupported: []string{"code"},
-		ScopesSupported: []string{"repo"},
+		ScopesSupported: []string{"repo", "read:user", "user:email"},
 	}
 	githubClient := oauth.Client{
 		Callback: "/oauth2/github",
 		Id: config.GithubClientId,
-		Scopes: "repo",
+		Scopes: "repo read:user user:email",
 		Secret: config.GithubClientSecret,
 	}
-	githubProvider := oauth.NewOAuthProvider(githubConfig, githubClient)
+	githubProvider := oauth.NewGithubOIDCProvider(githubConfig, githubClient)
 	serveMux.Handle("/connect/github", h.Authenticated(githubProvider.Redirect()))
 	serveMux.Handle("/oauth2/github", h.Authenticated(githubProvider.Callback(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
+			// todo(jc): Implement "Connect with GitHub" and remove auth gate.
+
 			ctx := r.Context()
+			session, ok := SessionFromContext(ctx)
+			if !ok {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+
 			tokens, ok := oauth.TokensFromContext(ctx)
 			if !ok {
 				w.WriteHeader(http.StatusInternalServerError)
+				return
 			}
 
-			// Use token to grab GitHub repos.
-			log.Print(tokens)
+			claims, ok := oauth.ClaimsFromContext(ctx)
+			if !ok {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
 
-			w.Write([]byte("wip"))
+			// Store GitHub as a provider.
+			err := h.LinkProvider(session.IdentityId, claims.Issuer, claims.Subject, tokens.AccessToken)
+			if err != nil {
+				log.Print(err)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+
+			http.Redirect(w, r, "/", http.StatusSeeOther)
 		},
 	))))
 
 	mux := DrainAndClose(serveMux)
 
 	server := &http.Server{
-		Addr: "127.0.0.1:" + config.Port,
+		Addr: "localhost:" + config.Port,
 		Handler: http.TimeoutHandler(
 			mux,
 			2 * time.Minute,
@@ -209,40 +227,11 @@ func main() {
 }
 
 var htmlTemplates = template.Must(
-	template.New("loggedIn").Funcs(template.FuncMap{
+	template.New("loggedIn.html").Funcs(template.FuncMap{
 		"date": func(ts int64) string {
 			return time.Unix(ts, 0).Format("Jan 2, 2006 3:04 PM MST")
 		},
-	}).Parse(`
-		<!doctype html>
-		<html>
-			<head></head>
-			<body>
-				<p>Logged in as {{.Name}} at {{.Email}}!</p>
-				<h2>Active Sessions</h2>
-				{{range .Sessions}}
-					<hr>
-					<p>{{.IpAddr}}</p>
-					<p>{{.Device}}</p>
-					<p>Signed in on {{.Created | date}}</p>
-					<p>Expires on {{.ExpiresAt | date}}<p>
-					<hr>
-				{{end}}
-				<h2>Recent Activity</h2>
-				{{range .Activities}}
-					<p>{{.Action}} on {{.Created | date}}</p>
-				{{else}}
-					<p>No recent activity.</p>
-				{{end}}
-				<p>
-				{{if .Repos}}
-				{{else}}
-					<p><a href="/connect/github">Connect GitHub</a></p>
-				{{end}}
-				<p><a href="/logout">Log out</a></p>
-			</body>
-		</html>
-	`),
+	}).ParseFiles("templates/loggedIn.html"),
 )
 
 func index(w http.ResponseWriter, r *http.Request) {
@@ -281,11 +270,25 @@ func (h *Handler) loggedIn(w http.ResponseWriter, r *http.Request) {
 	// Get recent activity.
 	activities, _ := h.GetRecentActivities(activeSession.IdentityId, 10)
 
-	err := htmlTemplates.ExecuteTemplate(w, "loggedIn", map[string]any{
+	// Try to get repos. Skipped silently if GitHub isn't connected (no token)
+	// or the call fails — the page still renders, just without repos.
+	var repos []github.Repo
+	if token, err := h.GetProviderToken(activeSession.IdentityId, "GitHub"); err != nil {
+		log.Print(err)
+	} else if token != "" {
+		if repos, err = github.GetRepos(token); err != nil {
+			log.Print(err)
+		}
+	}
+
+	log.Print(repos)
+
+	err := htmlTemplates.ExecuteTemplate(w, "loggedIn.html", map[string]any{
 		"Name": activeSession.Name,
 		"Email": activeSession.Email,
 		"Sessions": sessions,
 		"Activities": activities,
+		"Repos": repos,
 	})
 	if err != nil {
 		log.Print(err)

@@ -1,0 +1,66 @@
+<!doctype html>
+<html>
+  <head>
+    <style>
+      #repos {
+        max-height: 20vh;
+        overflow-y: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <p>Logged in as {{.Name}} at {{.Email}}!</p>
+    <p>
+    {{if .Repos}}
+      <h2>GitHub Repos</h2>
+      <div id="repos">
+        {{range .Repos}}
+          <p><a href="{{.Url}}">{{.Name}}</a> — {{.Description}}</p>
+        {{end}}
+      </div>
+    {{else}}
+      <p><a href="/connect/github">Connect GitHub</a></p>
+    {{end}}
+    <h2>Active Sessions</h2>
+    {{range .Sessions}}
+      <hr>
+      <p>{{.IpAddr}}</p>
+      <p>{{.Device}}</p>
+      <p>Signed in on {{.Created | date}}</p>
+      <p>Expires on {{.ExpiresAt | date}}<p>
+      <hr>
+    {{end}}
+    <h2>Recent Activity</h2>
+    {{range .Activities}}
+      <p>{{.Action}} on {{.Created | date}}</p>
+    {{else}}
+      <p>No recent activity.</p>
+    {{end}}
+    <hr>
+    <p><a href="#" id="new-passkey">New passkey</a></p>
+    <hr>
+    <p><a href="/logout">Log out</a></p>
+    <script>
+      const newPasskeyEle = document.querySelector("#new-passkey");
+      newPasskeyEle.addEventListener("click", event => {
+        event.preventDefault();
+        // We want to ask for new passkey.
+        navigator.credentials.create({
+          publicKey: {
+            challenge: new Uint8Array([0]).buffer,
+            pubKeyCredParams: [{
+              type: "public-key",
+              alg: -7,
+            }],
+            rp: {name: window.location.hostname, id: window.location.hostname},
+            user: {
+              id: new Uint8Array(1),
+              name: "user",
+              displayName: "",
+            }
+          }
+        }).then(console.log, console.log);
+      });
+    </script>
+  </body>
+</html>
