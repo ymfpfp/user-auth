@@ -19,7 +19,7 @@ func hashToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (h Handler) CreateIdentity(name, email string) (int64, error) {
+func (h *Handler) CreateIdentity(name, email string) (int64, error) {
 	result, err := h.db.Exec(
 		"INSERT INTO identities (name, email) VALUES (?, ?)",
 		name, email,
@@ -31,7 +31,7 @@ func (h Handler) CreateIdentity(name, email string) (int64, error) {
 }
 
 // Attach the provider to the identity without triggering.
-func (h Handler) LinkProvider(identityId int64, issuer, subject, accessToken string) error {
+func (h *Handler) LinkProvider(identityId int64, issuer, subject, accessToken string) error {
 	encryptedAccessToken, err := data.EncryptToken(h.config.RootKey, []byte(accessToken))
 	if err != nil {
 		return err
@@ -44,7 +44,7 @@ func (h Handler) LinkProvider(identityId int64, issuer, subject, accessToken str
 	return err
 }
 
-func (h Handler) CreateIdentityWithProvider(issuer, subject, name, email string, accessToken *string) (int64, error) {
+func (h *Handler) CreateIdentityWithProvider(issuer, subject, name, email string, accessToken *string) (int64, error) {
 	tx, err := h.db.Begin()
 	if err != nil {
 		return -1, err
@@ -84,7 +84,7 @@ func (h Handler) CreateIdentityWithProvider(issuer, subject, name, email string,
 	return id, tx.Commit()
 }
 
-func (h Handler) GetProviderToken(identityId int64, issuer string) (string, error) {
+func (h *Handler) GetProviderToken(identityId int64, issuer string) (string, error) {
 	var encryptedAccessToken []byte
 	err := h.db.QueryRow(
 		"SELECT access_token FROM providers WHERE identity_id = ? AND issuer = ?",
@@ -108,7 +108,7 @@ func (h Handler) GetProviderToken(identityId int64, issuer string) (string, erro
 	return string(accessToken), nil
 }
 
-func (h Handler) CreateSession(identityId int64, ip, device string, ttl time.Duration) (string, error) {
+func (h *Handler) CreateSession(identityId int64, ip, device string, ttl time.Duration) (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
@@ -127,7 +127,7 @@ func (h Handler) CreateSession(identityId int64, ip, device string, ttl time.Dur
 	return token, nil
 }
 
-func (h Handler) GetSession(sessionId string) (data.Session, error) {
+func (h *Handler) GetSession(sessionId string) (data.Session, error) {
 	var session data.Session
 	err := h.db.QueryRow(
 		`SELECT s.id, i.name, i.email, s.identity_id, s.ip_address, s.device, s.created, s.expires_at
@@ -152,13 +152,13 @@ func (h Handler) GetSession(sessionId string) (data.Session, error) {
 	return session, nil
 }
 
-func (h Handler) RevokeSession(sessionId string) error {
+func (h *Handler) RevokeSession(sessionId string) error {
 	hashedSessionId := hashToken(sessionId)
 	_, err := h.db.Exec("DELETE FROM sessions WHERE id = ?", hashedSessionId)
 	return err
 }
 
-func (h Handler) GetActiveSessions(identityId int64) ([]data.Session, error) {
+func (h *Handler) GetActiveSessions(identityId int64) ([]data.Session, error) {
 	var sessions []data.Session
 
 	rows, err := h.db.Query("SELECT * FROM sessions WHERE identity_id = ?", identityId)
@@ -186,7 +186,7 @@ func (h Handler) GetActiveSessions(identityId int64) ([]data.Session, error) {
 	return sessions, rows.Err()
 }
 
-func (h Handler) RecordActivity(identityId int64, action string) error {
+func (h *Handler) RecordActivity(identityId int64, action string) error {
 	_, err := h.db.Exec(
 		"INSERT INTO activities (identity_id, action, created) VALUES (?, ?, ?)",
 		identityId, action, time.Now().Unix(),
@@ -194,7 +194,7 @@ func (h Handler) RecordActivity(identityId int64, action string) error {
 	return err
 }
 
-func (h Handler) GetRecentActivities(identityId int64, limit int) ([]data.Activity, error) {
+func (h *Handler) GetRecentActivities(identityId int64, limit int) ([]data.Activity, error) {
 	var activities []data.Activity
 
 	rows, err := h.db.Query(
@@ -226,7 +226,7 @@ func (h Handler) GetRecentActivities(identityId int64, limit int) ([]data.Activi
 	return activities, rows.Err()
 }
 
-func (h Handler) UpsertLogin(issuer, subject, name, email string) (int64, bool, error) {
+func (h *Handler) UpsertLogin(issuer, subject, name, email string) (int64, bool, error) {
 	var identityId int64
 	err := h.db.QueryRow(
 		"SELECT identity_id FROM providers WHERE issuer = ? AND subject = ?",
@@ -244,7 +244,7 @@ func (h Handler) UpsertLogin(issuer, subject, name, email string) (int64, bool, 
 	}
 }
 
-func (h Handler) UpsertLoginFromClaims(claims oauth.OIDCClaims) (int64, bool, error) {
+func (h *Handler) UpsertLoginFromClaims(claims oauth.OIDCClaims) (int64, bool, error) {
 	// This expects `claims` to contain info about name and email.
 	name, ok := utils.Get[string](claims.Raw, "name")
 	if !ok {

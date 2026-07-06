@@ -16,11 +16,21 @@ const (
 	CREATE TABLE IF NOT EXISTS identities (
 		id INTEGER PRIMARY KEY,
 		name TEXT,
-		email TEXT
+		email TEXT,
+
+		-- For email-based login.
+		temporary_code TEXT
+		code_expires_at INTEGER
+	);
+
+	CREATE TABLE IF NOT EXISTS mfa_codes (
+		identity_id INTEGER NOT NULL,
+		code TEXT NOT NULL,
+		FOREIGN KEY (identity_id) REFERENCES identities(id)
 	);
 
 	CREATE TABLE IF NOT EXISTS providers (
-		identity_id INTEGER,
+		identity_id INTEGER NOT NULL,
 		issuer TEXT NOT NULL,
 		subject TEXT NOT NULL,
 		access_token BLOB,
@@ -88,7 +98,7 @@ func NewDb() *sql.DB {
 func EncryptToken(key, plaintext []byte) ([]byte, error) {
 	// AES is a block cipher, that is, it encrypts fixed size blocks, and will use CBC
 	// for chaining together multiple blocks.
-	// 
+	//
 	// Go's `aes.NewCipher` will determine the AES version to used baseed on the byte size
 	// of the passed in key, in this case we'll say 32 bytes for AES-256.
 	block, err := aes.NewCipher(key)
@@ -103,14 +113,14 @@ func EncryptToken(key, plaintext []byte) ([]byte, error) {
 	}
 
 	// Counter (CTR) Mode makes uses of a nonce. By default, the nonce is 12 bytes.
-	// It turns a block cipher into a stream cipher. Here, we generate a random base. 
+	// It turns a block cipher into a stream cipher. Here, we generate a random base.
 	// The 12 bytes are taken and are todo(jc)
-	nonce := make([]byte, gcm.NonceSize()) 
+	nonce := make([]byte, gcm.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, err
 	}
 
-	// Seal prepends nothing; we prepend the nonce ourselves so it travels with the 
+	// Seal prepends nothing; we prepend the nonce ourselves so it travels with the
 	// ciphertext.
 	return gcm.Seal(nonce, nonce, plaintext, nil), nil
 }

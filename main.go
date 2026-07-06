@@ -4,8 +4,6 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"html/template"
-
-	// "html/template"
 	"log"
 	"net"
 	"net/http"
@@ -35,6 +33,7 @@ type Config struct {
 type Handler struct {
 	db *sql.DB
 	config *Config
+	mailer *Mailer
 }
 
 func main() {
@@ -55,7 +54,7 @@ func main() {
 		log.Fatal("Invalid ROOT_KEY: ", err)
 	}
 
-	config := Config {
+	config := Config{
 		GoogleClientId: os.Getenv("GOOGLE_CLIENT_ID"),
 		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
 
@@ -73,13 +72,15 @@ func main() {
 	h := &Handler{
 		db: db,
 		config: &config,
+		mailer: NewSESMailerFromEnv(),
 	}
-	_ = h
 
 	// Set up new server mux.
 	serveMux := http.NewServeMux()
 
 	serveMux.HandleFunc("/", index)
+	serveMux.HandleFunc("/login/email", h.emailLogin)
+	serveMux.HandleFunc("/login/email/{code}", h.emailVerify)
 	serveMux.Handle("/loggedIn", h.Authenticated(http.HandlerFunc(h.loggedIn)))
 	serveMux.Handle("/logout", h.Authenticated(http.HandlerFunc(h.logout)))
 
@@ -88,12 +89,12 @@ func main() {
 		log.Fatal("Unable to configure Google OIDC ", err)
 	}
 	googleClient := oauth.Client{
-		Callback: "/oauth2/google", 
-		Id: config.GoogleClientId,
-		Scopes: "openid email profile",
-		Secret: config.GoogleClientSecret,
+		Callback: "/oauth2/google",
+		Id:       config.GoogleClientId,
+		Scopes:   "openid email profile",
+		Secret:   config.GoogleClientSecret,
 	}
-	googleProvider := oauth.NewOIDCProvider(googleConfig, googleClient) 
+	googleProvider := oauth.NewOIDCProvider(googleConfig, googleClient)
 	serveMux.Handle("/login/google", googleProvider.Redirect())
 	serveMux.Handle("/oauth2/google", googleProvider.Callback(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
@@ -119,7 +120,7 @@ func main() {
 			if err != nil {
 				ip = r.RemoteAddr
 			}
-		
+
 			session, err := h.CreateSession(id, ip, device, time.Hour * 24 * 7)
 			if err != nil {
 				log.Print(err)
@@ -147,7 +148,7 @@ func main() {
 	// here we'll fill them just with what we need.
 	//
 	// GitHub access tokens are long-lived. Typical OAuth apps will have get a
-	// refresh token to maintain longevity; in that case, we'd also store a refresh token in 
+	// refresh token to maintain longevity; in that case, we'd also store a refresh token in
 	// the db.
 	githubConfig := oauth.Config{
 		Issuer: "GitHub",
@@ -219,7 +220,7 @@ func main() {
 
 	log.Print("Listening on ", server.Addr)
 	// To serve over TLS, need a trusted signed cert file and a private key.
-	// Generate local test one with mkcert, openssl, etc. 
+	// Generate local test one with mkcert, openssl, etc.
 	err = server.ServeTLS(listener, "cert.pem", "private.pem")
 	if err != http.ErrServerClosed {
 		log.Fatal(err)
@@ -248,7 +249,10 @@ func index(w http.ResponseWriter, r *http.Request) {
 		<head></head>
 		<body>
 			<p><a href="/login/google">Continue with Google</a><p>
-			<p><a href="/login/email">Continue with email</a></p>
+			<form action="/login/email" method="POST">
+				<input type="email" name="email" required />
+				<button>Continue with email</button>
+			</form>
 			<p><a href="/login/saml">Continue with SAML SSO</a></p>
 			<p><a href="/login/passkey">Login with passkey</a></p>
 		</body>
@@ -302,7 +306,7 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
-	
+
 	h.RevokeSession(activeSession.Id)
 
 	if err := h.RecordActivity(activeSession.IdentityId, "Logged out"); err != nil {
