@@ -12,19 +12,21 @@ const (
 	CREATE TABLE IF NOT EXISTS identities (
 		uuid TEXT PRIMARY KEY,
 		name TEXT,
-		email TEXT
+		email TEXT UNIQUE,
+		mfa_enabled BOOLEAN NOT NULL DEFAULT FALSE
 	);
 
-	CREATE TABLE IF NOT EXISTS temporary_codes (
+	CREATE TABLE IF NOT EXISTS codes (
 		id INTEGER PRIMARY KEY,
 		identity_id TEXT NOT NULL,
 		purpose TEXT NOT NULL,
 		code TEXT NOT NULL,
-		expires_at INTEGER NOT NULL,
+		-- Backup codes don't necessarily have these.
+		expires_at INTEGER,
 		FOREIGN KEY (identity_id) REFERENCES identities(id)
 	);
 
-	CREATE INDEX IF NOT EXISTS user_temporary_codes ON temporary_codes(identity_id, code);
+	CREATE INDEX IF NOT EXISTS user_codes ON codes(identity_id, code);
 
 	CREATE TABLE IF NOT EXISTS providers (
 		identity_id TEXT NOT NULL,
@@ -61,25 +63,31 @@ const (
 	`
 )
 
-// Types that map to the db. Keep these types PascalCase for usage with `html/template`.
+type Activity struct {
+	Id         int64
+	IdentityId string
+	Action     string
+	Created    int64
+}
 
 type Session struct {
-	Id string
-	Name string
+	Id    string
+	Name  string
 	Email string
 
 	IdentityId string
-	IpAddr string
-	Device string
-	Created int64
-	ExpiresAt int64
+	IpAddr     string
+	Device     string
+	Created    int64
+	ExpiresAt  int64
 }
 
-type Activity struct {
-	Id int64
+type TemporaryCode struct {
+	Id         int64
 	IdentityId string
-	Action string
-	Created int64
+	Purpose    string
+	Code       string
+	ExpiresAt  int64
 }
 
 func newDB() *sql.DB {
@@ -93,4 +101,3 @@ func newDB() *sql.DB {
 	}
 	return db
 }
-

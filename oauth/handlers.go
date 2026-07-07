@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-func TokensFromContext (ctx context.Context) (Tokens, bool) {
+func TokensFromContext(ctx context.Context) (Tokens, bool) {
 	tokens, ok := ctx.Value(tokensKey).(Tokens)
 	return tokens, ok
 }
@@ -31,7 +31,7 @@ func (provider Provider) Redirect() http.Handler {
 	for scope := range scopes {
 		if !slices.Contains(provider.Config.ScopesSupported, scope) {
 			log.Fatalf("Unsupported scope %s given provider %s", scope, provider.Config.Issuer)
-	 	}
+		}
 	}
 
 	// Prefer the modern authorization code flow.
@@ -40,7 +40,7 @@ func (provider Provider) Redirect() http.Handler {
 	}
 
 	return http.HandlerFunc(
-		func (w http.ResponseWriter, r *http.Request) {
+		func(w http.ResponseWriter, r *http.Request) {
 			// Generate random state to prevent CSRF.
 			state, err := randomState()
 			if err != nil {
@@ -50,8 +50,8 @@ func (provider Provider) Redirect() http.Handler {
 			}
 
 			http.SetCookie(w, &http.Cookie{
-				Name: "state",
-				Value: state,
+				Name:     "state",
+				Value:    state,
 				HttpOnly: true,
 				SameSite: http.SameSiteLaxMode,
 				// Secure: true,
@@ -66,10 +66,10 @@ func (provider Provider) Redirect() http.Handler {
 				return
 			}
 
-			redirectUri := url.URL {
+			redirectUri := url.URL{
 				Scheme: "https",
-				Host: r.Host,
-				Path: provider.Client.Callback,
+				Host:   r.Host,
+				Path:   provider.Client.Callback,
 			}
 
 			nonce, err := randomState()
@@ -98,7 +98,7 @@ func (provider Provider) Redirect() http.Handler {
 
 func (provider Provider) Callback(callback http.Handler) http.Handler {
 	return http.HandlerFunc(
-		func (w http.ResponseWriter, r *http.Request) {
+		func(w http.ResponseWriter, r *http.Request) {
 			q := r.URL.Query()
 
 			callbackErr := q.Get("error")
@@ -124,27 +124,27 @@ func (provider Provider) Callback(callback http.Handler) http.Handler {
 
 			// Delete the cookie.
 			http.SetCookie(w, &http.Cookie{
-				Name: "state",
-				Value: "",
+				Name:     "state",
+				Value:    "",
 				HttpOnly: true,
-				MaxAge: -1,
-				Path: "/",
+				MaxAge:   -1,
+				Path:     "/",
 				// Secure: true,
 				SameSite: http.SameSiteLaxMode,
 			})
 
-			redirectUri := url.URL {
+			redirectUri := url.URL{
 				Scheme: "https",
-				Host: r.Host,
-				Path: provider.Client.Callback,
+				Host:   r.Host,
+				Path:   provider.Client.Callback,
 			}
-			request := TokenRequest {
+			request := TokenRequest{
 				// Exchange code for token.
-				Code: code,
+				Code:     code,
 				ClientId: provider.Client.Id,
 				// Client secret confirms that the request is indeed coming from my app.
 				ClientSecret: provider.Client.Secret,
-				// todo(jc): Why is this necessary? 
+				// todo(jc): Why is this necessary?
 				RedirectUri: redirectUri.String(),
 				// Must be set to `authorization_code` per the standard, this returns the
 				// authorization code.
@@ -184,7 +184,7 @@ func (provider Provider) Callback(callback http.Handler) http.Handler {
 
 			ctx := r.Context()
 
-			// At this point, we have the token response. It is up to the resolver to 
+			// At this point, we have the token response. It is up to the resolver to
 			// check that the token is valid and maybe inject some info into context.
 			ctx, err = provider.Resolver.Resolve(tokens, ctx)
 			if err != nil {

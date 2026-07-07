@@ -5,12 +5,11 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"time"
 )
-
-const temporaryCodeTTL = 15 * time.Minute
 
 func randomToken() (string, error) {
 	b := make([]byte, 16)
@@ -71,4 +70,68 @@ func decryptToken(key, blob []byte) ([]byte, error) {
 	}
 	nonce, ciphertext := blob[:n], blob[n:]
 	return gcm.Open(nil, nonce, ciphertext, nil)
+}
+
+const temporaryCodeTTL = 15 * time.Minute
+
+const (
+	backupPurpose  string = "backup"
+	emailPurpose   string = "email"
+	passkeyPurpose string = "passkey"
+)
+
+func (h *Handler) newTemporaryCode(identityId, purpose string) (string, error) {
+	code, err := randomToken()
+	if err != nil {
+		return "", err
+	}
+	_, err = h.db.Exec(
+		"INSERT INTO codes (identity_id, purpose, code, expires_at) VALUES (?, ?, ?, ?)",
+		identityId, purpose, hashToken(code), time.Now().Add(temporaryCodeTTL).Unix(),
+	)
+	if err != nil {
+		return "", err
+	}
+	return code, nil
+}
+
+func (h *Handler) getTemporaryCode(code, purpose string) (TemporaryCode, error) {
+	var temporaryCode TemporaryCode
+	err := h.db.QueryRow(
+		"SELECT * FROM codes WHERE code = ? AND purpose = ?",
+		code, purpose,
+	).Scan(
+		&temporaryCode.Id,
+		&temporaryCode.IdentityId,
+		&temporaryCode.Purpose,
+		&temporaryCode.Code,
+		&temporaryCode.ExpiresAt,
+	)
+	if err != nil {
+		return temporaryCode, err
+	}
+	return temporaryCode, nil
+}
+
+func getTemporaryCodeWithTx(tx *sql.Tx, code, purpose string) (TemporaryCode, error) {
+	var temporaryCode TemporaryCode
+	err := tx.QueryRow(
+		"SELECT * FROM codes WHERE code = ? AND purpose = ?",
+		code, purpose,
+	).Scan(
+		&temporaryCode.Id,
+		&temporaryCode.IdentityId,
+		&temporaryCode.Purpose,
+		&temporaryCode.Code,
+		&temporaryCode.ExpiresAt,
+	)
+	if err != nil {
+		return temporaryCode, err
+	}
+	return temporaryCode, nil
+}
+
+func deleteTemporaryCodeWithTx(tx *sql.Tx, id int64) error {
+	_, err := tx.Exec("DELETE FROM codes WHERE id = ?", id)
+	return err
 }

@@ -9,17 +9,17 @@ import (
 type Client struct {
 	Callback string
 
-	Id string
+	Id     string
 	Secret string
 
-	Scopes string 
+	Scopes string
 }
 
-// A provider is made up of config info, client specific info, and a resolver which is just 
+// A provider is made up of config info, client specific info, and a resolver which is just
 // a callback that performs either OAuth or OIDC.
 type Provider struct {
-	Client Client
-	Config Config
+	Client   Client
+	Config   Config
 	Resolver Resolver
 }
 
@@ -33,11 +33,11 @@ func NewOIDCProvider(config Config, client Client) Provider {
 		Client: client,
 		Config: config,
 		Resolver: &OIDCResolver{
-			JWKS: jwks,
+			JWKS:    jwks,
 			JWKSUri: config.JWKSUri,
 			ToVerify: OIDCVerification{
 				Audience: client.Id,
-				Issuer: config.Issuer,
+				Issuer:   config.Issuer,
 			},
 		},
 	}
@@ -45,8 +45,8 @@ func NewOIDCProvider(config Config, client Client) Provider {
 
 func NewOAuthProvider(config Config, client Client) Provider {
 	return Provider{
-		Client: client,
-		Config: config,
+		Client:   client,
+		Config:   config,
 		Resolver: &OAuthResolver{},
 	}
 }

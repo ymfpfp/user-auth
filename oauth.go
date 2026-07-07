@@ -4,7 +4,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"time"
 
 	"github.com/ymfpfp/user-auth/oauth"
 )
@@ -24,9 +23,9 @@ func oauthMux(h *Handler) *http.ServeMux {
 	}
 	googleClient := oauth.Client{
 		Callback: googleCallback,
-		Id: config.GoogleClientId,
-		Scopes: "openid email profile",
-		Secret: config.GoogleClientSecret,
+		Id:       config.GoogleClientId,
+		Scopes:   "openid email profile",
+		Secret:   config.GoogleClientSecret,
 	}
 	googleProvider := oauth.NewOIDCProvider(googleConfig, googleClient)
 	mux.Handle("/oauth/login/google", googleProvider.Redirect())
@@ -55,23 +54,23 @@ func oauthMux(h *Handler) *http.ServeMux {
 				ip = r.RemoteAddr
 			}
 
-			session, err := h.createSession(id, ip, device, time.Hour * 24 * 7)
+			session, err := h.createSession(id, ip, device)
 			if err != nil {
 				log.Print(err)
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
 
-			if err := h.recordActivity(id, "Logged in via Google from " + ip); err != nil {
+			if err := h.recordActivity(id, "Logged in via Google from "+ip); err != nil {
 				log.Print(err)
 			}
 
 			// Return session cookie.
 			http.SetCookie(w, &http.Cookie{
-				Name: "session",
-				Value: session,
+				Name:     "session",
+				Value:    session,
 				HttpOnly: true,
-				Path: "/",
+				Path:     "/",
 			})
 
 			http.Redirect(w, r, "/loggedIn", http.StatusFound)
@@ -85,17 +84,17 @@ func oauthMux(h *Handler) *http.ServeMux {
 	// refresh token to maintain longevity; in that case, we'd also store a refresh token in
 	// the db.
 	githubConfig := oauth.Config{
-		Issuer: "GitHub",
-		AuthorizationEndpoint: "https://github.com/login/oauth/authorize",
-		TokenEndpoint: "https://github.com/login/oauth/access_token",
+		Issuer:                 "GitHub",
+		AuthorizationEndpoint:  "https://github.com/login/oauth/authorize",
+		TokenEndpoint:          "https://github.com/login/oauth/access_token",
 		ResponseTypesSupported: []string{"code"},
-		ScopesSupported: []string{"repo", "read:user", "user:email"},
+		ScopesSupported:        []string{"repo", "read:user", "user:email"},
 	}
 	githubClient := oauth.Client{
 		Callback: githubCallback,
-		Id: config.GithubClientId,
-		Scopes: "repo read:user user:email",
-		Secret: config.GithubClientSecret,
+		Id:       config.GithubClientId,
+		Scopes:   "repo read:user user:email",
+		Secret:   config.GithubClientSecret,
 	}
 	githubProvider := oauth.NewGithubOIDCProvider(githubConfig, githubClient)
 	mux.Handle("/oauth/connect/github", h.authenticated(githubProvider.Redirect()))
@@ -135,4 +134,3 @@ func oauthMux(h *Handler) *http.ServeMux {
 	))))
 	return mux
 }
-

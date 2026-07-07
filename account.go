@@ -36,7 +36,7 @@ func (h *Handler) createIdentityWithProvider(issuer, subject, name, email string
 	defer tx.Rollback()
 
 	_, err = tx.Exec(
-		"INSERT INTO identities (uuid, name, email) VALUES (?, ?, ?)", 
+		"INSERT INTO identities (uuid, name, email) VALUES (?, ?, ?)",
 		uuid, name, email,
 	)
 	if err != nil {

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"mime/multipart"
 	"net"
-	"net/smtp"
 	"net/textproto"
 	"os"
 	"strings"
@@ -32,7 +31,7 @@ type Mailer struct {
 	// and receivers can use the public key to check that the email was not modified
 	// and sent by the service claiming to send it.
 	From string
-	Auth smtp.Auth
+	Auth Auth
 }
 
 func NewSESMailerFromEnv() *Mailer {
@@ -49,14 +48,13 @@ func NewSESMailerFromEnv() *Mailer {
 	username := os.Getenv("SES_SMTP_USERNAME")
 	password := os.Getenv("SES_SMTP_PASSWORD")
 	from := os.Getenv("SES_FROM_ADDRESS")
+	// todo(jc): Invalid if any of these are empty.
 
 	return &Mailer{
 		Host: host,
 		Port: port,
 		From: from,
-		// `PlainAuth` only transmits the password once the connection is
-		// encrypted; net/smtp enforces this, see below in `Send`.
-		Auth: smtp.PlainAuth("", username, password, host),
+		Auth: Auth{Username: username, Password: password},
 	}
 }
 
@@ -78,9 +76,7 @@ func (mailer *Mailer) Send(email Email) error {
 	addr := net.JoinHostPort(mailer.Host, mailer.Port)
 	// The last arg is the envelope-recipient list; SES uses it for actual
 	// routing, independent of `To`. This is how CC/BCC works.
-	//
-	// `SendMail` will attempt to use TLS when the server on the other end advertises it.
-	return smtp.SendMail(addr, mailer.Auth, mailer.From, []string{email.To}, message)
+	return SendMail(addr, mailer.Auth, mailer.From, []string{email.To}, message)
 }
 
 // Assemble a RFC 5322, or Internet Message Format (IMF) message.
@@ -141,4 +137,3 @@ func (mailer *Mailer) buildMessage(email Email) ([]byte, error) {
 
 	return []byte(b.String()), nil
 }
-

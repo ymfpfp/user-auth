@@ -17,10 +17,10 @@ import (
 )
 
 type Config struct {
-	GoogleClientId string
+	GoogleClientId     string
 	GoogleClientSecret string
 
-	GithubClientId string
+	GithubClientId     string
 	GithubClientSecret string
 
 	Port string
@@ -29,7 +29,7 @@ type Config struct {
 }
 
 type Handler struct {
-	db *sql.DB
+	db     *sql.DB
 	config *Config
 	mailer *email.Mailer
 }
@@ -53,10 +53,10 @@ func main() {
 	}
 
 	config := Config{
-		GoogleClientId: os.Getenv("GOOGLE_CLIENT_ID"),
+		GoogleClientId:     os.Getenv("GOOGLE_CLIENT_ID"),
 		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
 
-		GithubClientId: os.Getenv("GITHUB_CLIENT_ID"),
+		GithubClientId:     os.Getenv("GITHUB_CLIENT_ID"),
 		GithubClientSecret: os.Getenv("GITHUB_CLIENT_SECRET"),
 
 		Port: port,
@@ -68,7 +68,7 @@ func main() {
 	defer db.Close()
 
 	h := &Handler{
-		db: db,
+		db:     db,
 		config: &config,
 		mailer: email.NewSESMailerFromEnv(),
 	}
@@ -90,10 +90,10 @@ func main() {
 		Addr: "localhost:" + config.Port,
 		Handler: http.TimeoutHandler(
 			mux,
-			2 * time.Minute,
+			2*time.Minute,
 			"",
 		),
-		IdleTimeout: 5 * time.Minute,
+		IdleTimeout:       5 * time.Minute,
 		ReadHeaderTimeout: time.Minute,
 	}
 
@@ -116,10 +116,16 @@ var htmlTemplates = template.Must(
 		"date": func(ts int64) string {
 			return time.Unix(ts, 0).Format("Jan 2, 2006 3:04 PM MST")
 		},
-	}).ParseFiles("templates/loggedIn.html"),
+	}).ParseFiles("templates/index.html", "templates/loggedIn.html"),
 )
 
 func index(w http.ResponseWriter, r *http.Request) {
+	var flashValue string
+	if flash, _ := r.Cookie("flash"); flash != nil {
+		flashValue = flash.Value
+		deleteCookie(w, "flash")
+	}
+
 	_, err := r.Cookie("session")
 	if err == nil {
 		// Try redirecting to /loggedIn, where the authentication middleware will run.
@@ -127,22 +133,13 @@ func index(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	html := `
-	<!doctype html>
-	<html>
-		<head></head>
-		<body>
-			<p><a href="/oauth/login/google">Continue with Google</a><p>
-			<form action="/login/email" method="POST">
-				<input type="email" name="email" required />
-				<button>Continue with email</button>
-			</form>
-			<p><a href="/login/saml">Continue with SAML SSO</a></p>
-			<p><a href="/login/passkey">Login with passkey</a></p>
-		</body>
-	</html>
-	`
-	w.Write([]byte(html))
+	err = htmlTemplates.ExecuteTemplate(w, "index.html", map[string]any{
+		"Flash": flashValue,
+	})
+	if err != nil {
+		log.Print(err)
+		w.WriteHeader(http.StatusInternalServerError)
+	}
 }
 
 func (h *Handler) loggedIn(w http.ResponseWriter, r *http.Request) {
@@ -177,13 +174,13 @@ func (h *Handler) loggedIn(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err = htmlTemplates.ExecuteTemplate(w, "loggedIn.html", map[string]any{
-		"Id": activeSession.IdentityId,
-		"Challenge": challenge,
-		"Name": activeSession.Name,
-		"Email": activeSession.Email,
-		"Sessions": sessions,
+		"Id":         activeSession.IdentityId,
+		"Challenge":  challenge,
+		"Name":       activeSession.Name,
+		"Email":      activeSession.Email,
+		"Sessions":   sessions,
 		"Activities": activities,
-		"Repos": repos,
+		"Repos":      repos,
 	})
 	if err != nil {
 		log.Print(err)

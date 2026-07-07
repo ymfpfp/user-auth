@@ -20,6 +20,32 @@ func clearCookies(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func setCookie(w http.ResponseWriter, name, value string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:  name,
+		Value: value,
+		// JS cannot read this cookie.
+		HttpOnly: true,
+		// Only over HTTPS.
+		Secure: true,
+		// Applies to all paths.
+		Path:     "/",
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func deleteCookie(w http.ResponseWriter, name string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     name,
+		Value:    "",
+		HttpOnly: true,
+		Secure:   true,
+		Path:     "/",
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
+}
+
 func drainAndClose(next http.Handler) http.Handler {
 	return http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {

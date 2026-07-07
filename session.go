@@ -4,7 +4,9 @@ import (
 	"time"
 )
 
-func (h *Handler) createSession(identityId string, ip, device string, ttl time.Duration) (string, error) {
+var sessionTTL = int64((time.Hour * 24 * 7).Seconds())
+
+func (h *Handler) createSession(identityId string, ip, device string) (string, error) {
 	token, err := randomToken()
 	if err != nil {
 		return "", err
@@ -14,7 +16,7 @@ func (h *Handler) createSession(identityId string, ip, device string, ttl time.D
 	_, err = h.db.Exec(
 		`INSERT INTO sessions (id, identity_id, ip_address, device, created, expires_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		hashToken(token), identityId, ip, device, now, now + int64(ttl.Seconds()),
+		hashToken(token), identityId, ip, device, now, now+sessionTTL,
 	)
 	if err != nil {
 		return "", err
@@ -59,11 +61,11 @@ func (h *Handler) getActiveSessions(identityId string) ([]Session, error) {
 	for rows.Next() {
 		var session Session
 		err := rows.Scan(
-			&session.Id, 
-			&session.IdentityId, 
-			&session.IpAddr, 
-			&session.Device, 
-			&session.Created, 
+			&session.Id,
+			&session.IdentityId,
+			&session.IpAddr,
+			&session.Device,
+			&session.Created,
 			&session.ExpiresAt,
 		)
 		if err != nil {

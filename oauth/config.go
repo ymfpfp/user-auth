@@ -20,11 +20,11 @@ type Config struct {
 	Issuer string `json:"issuer"`
 	// Authorization server endpoint.
 	AuthorizationEndpoint string `json:"authorization_endpoint,omitempty"`
-	TokenEndpoint string `json:"token_endpoint,omitempty"`
-	JWKSUri string `json:"jwks_uri,omitempty"`
+	TokenEndpoint         string `json:"token_endpoint,omitempty"`
+	JWKSUri               string `json:"jwks_uri,omitempty"`
 	// Subject types are unique identification types for users.
 	// todo(jc): Do we need this?
-	SubjectTypesSupported []string `json:"subject_types_supported"`
+	SubjectTypesSupported  []string `json:"subject_types_supported"`
 	ResponseTypesSupported []string `json:"response_types_supported"`
 	// todo(jc): Do we need this?
 	IdTokenSigningAlgValuesSupported []string `json:"id_token_signing_alg_values_supported"`

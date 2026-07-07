@@ -25,7 +25,7 @@ func (resolver *GithubOIDCResolver) Resolve(tokens Tokens, ctx context.Context) 
 	// We will manually inject claims by using `access_token` to grab user data.
 	claims := OIDCClaims{
 		Issuer: resolver.Issuer,
-		Raw: map[string]any{},
+		Raw:    map[string]any{},
 	}
 
 	user, err := github.GetUser(tokens.AccessToken)
@@ -38,7 +38,7 @@ func (resolver *GithubOIDCResolver) Resolve(tokens Tokens, ctx context.Context) 
 		return ctx, err
 	}
 
-	claims.Subject = strconv.FormatInt(user.Id, 10) 
+	claims.Subject = strconv.FormatInt(user.Id, 10)
 	if len(user.Name) != 0 {
 		claims.Raw["name"] = user.Name
 	} else {

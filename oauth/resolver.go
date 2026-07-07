@@ -13,11 +13,11 @@ import (
 )
 
 type TokenRequest struct {
-	Code string 
-	ClientId string 
-	ClientSecret string 
-	RedirectUri string 
-	GrantType string 
+	Code         string
+	ClientId     string
+	ClientSecret string
+	RedirectUri  string
+	GrantType    string
 }
 
 func (tokenRequest TokenRequest) Encode() *strings.Reader {
@@ -32,8 +32,8 @@ func (tokenRequest TokenRequest) Encode() *strings.Reader {
 
 type Tokens struct {
 	AccessToken string `json:"access_token"`
-	IdToken string `json:"id_token"`
-	Nonce string `json:"nonce,omitempty"`
+	IdToken     string `json:"id_token"`
+	Nonce       string `json:"nonce,omitempty"`
 }
 
 type OIDCAudience []string
@@ -55,11 +55,11 @@ func (aud *OIDCAudience) UnmarshalJSON(data []byte) error {
 }
 
 type OIDCClaims struct {
-	Audience OIDCAudience `json:"aud"`
-	Issuer string `json:"iss"`
-	Subject string `json:"sub"`
-	ExpiresAt float64 `json:"exp"`
-	Nonce string `json:"nonce"`
+	Audience  OIDCAudience `json:"aud"`
+	Issuer    string       `json:"iss"`
+	Subject   string       `json:"sub"`
+	ExpiresAt float64      `json:"exp"`
+	Nonce     string       `json:"nonce"`
 	// Other claims.
 	Raw map[string]any `json:"-"`
 }
@@ -77,17 +77,17 @@ type OIDCResolver struct {
 	// An OIDC resolver has a JSON Web Key Set and a set of values to verify.
 	JWKS jwt.JWKS
 	// JWKSUri is where the key set is (re-)fetched from after key rotation.
-	JWKSUri string
+	JWKSUri  string
 	ToVerify OIDCVerification
 
 	// mu guards JWKS against concurrent `Resolve` calls.
-	mu sync.RWMutex
+	mu          sync.RWMutex
 	lastRefresh time.Time
 }
 
 type OIDCVerification struct {
 	Audience string
-	Issuer string
+	Issuer   string
 }
 
 func (resolver *OIDCResolver) Resolve(tokens Tokens, ctx context.Context) (context.Context, error) {
@@ -102,7 +102,7 @@ func (resolver *OIDCResolver) Resolve(tokens Tokens, ctx context.Context) (conte
 		return ctx, err
 	}
 
-	verified, err := jwtToken.Verify(jwk) 
+	verified, err := jwtToken.Verify(jwk)
 	if verified == false {
 		return ctx, jwt.InvalidJWT
 	} else if err != nil {
@@ -119,14 +119,14 @@ func (resolver *OIDCResolver) Resolve(tokens Tokens, ctx context.Context) (conte
 		return ctx, err
 	}
 
-	// In addition to verifying the signature, we also need to verify: 
+	// In addition to verifying the signature, we also need to verify:
 	// * `aud`. Short for audience, basically is this token meant for this client?
 	// * `exp`. Short for expiration, check that the token is still valid.
 	// * `iss`. Short for issuer, basically was this token issued by who we expected?
 
 	if time.Now().Unix() >= int64(claims.ExpiresAt) ||
-		 !slices.Contains(claims.Audience, resolver.ToVerify.Audience) ||
-		 claims.Issuer != resolver.ToVerify.Issuer {
+		!slices.Contains(claims.Audience, resolver.ToVerify.Audience) ||
+		claims.Issuer != resolver.ToVerify.Issuer {
 		return ctx, jwt.InvalidJWT
 	}
 
@@ -175,10 +175,9 @@ func (resolver *OIDCResolver) refreshJWKS() error {
 	return nil
 }
 
-// This does absolutely nothing - you write a custom resolver. 
-type OAuthResolver struct {}
+// This does absolutely nothing - you write a custom resolver.
+type OAuthResolver struct{}
 
 func (resolver *OAuthResolver) Resolve(tokens Tokens, ctx context.Context) (context.Context, error) {
 	return ctx, nil
 }
-

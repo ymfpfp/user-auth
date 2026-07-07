@@ -3,12 +3,11 @@ package main
 import (
 	"database/sql"
 	"errors"
-	"fmt"
-	"html/template"
 	"log"
 	"net"
 	"net/http"
 	"net/mail"
+	"net/url"
 	"strings"
 	"time"
 
@@ -18,7 +17,7 @@ import (
 func emailMux(h *Handler) *http.ServeMux {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/", func (w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", "POST")
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -44,22 +43,32 @@ func emailMux(h *Handler) *http.ServeMux {
 			return
 		}
 
-		// The server runs over TLS, so the callback link is https. r.Host carries
-		// the host:port the client used.
-		link := "https://" + r.Host + "/login/email/" + code
-
-		// Log the link so local development can finish the flow without a real
-		// inbox or configured SES credentials.
-		log.Printf("email login: link for %s -> %s", email, link)
-
-		if err := h.sendLoginEmail(email, link); err != nil {
-			// Non-fatal: the link is in the logs. In production you'd surface this.
-			log.Printf("email login: send failed: %v", err)
+		link := url.URL{
+			Scheme: "https",
+			Host:   r.Host,
+			Path:   "/login/email/" + code,
 		}
 
-		renderCheckEmail(w, email)
+		if err := h.sendLoginEmail(email, link.String()); err != nil {
+			// todo(jc): Non-fatal: the link is in the logs. In production you'd surface this.
+			log.Printf("email login: send failed: %v", err)
+			setCookie(
+				w,
+				"flash",
+				"Something went wrong. Try again.",
+			)
+		} else {
+			// "Flash" a message.
+			setCookie(
+				w,
+				"flash",
+				"Check your email "+email+" for a login code.",
+			)
+		}
+
+		http.Redirect(w, r, "/", http.StatusSeeOther)
 	})
-	mux.HandleFunc("/{code}", func (w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/{code}", func(w http.ResponseWriter, r *http.Request) {
 		identityId, err := h.redeemLoginCode(r.PathValue("code"))
 		if err != nil {
 			// Unknown, already-used, or empty code. Send them back to the start.
@@ -73,7 +82,7 @@ func emailMux(h *Handler) *http.ServeMux {
 			ip = r.RemoteAddr
 		}
 
-		session, err := h.createSession(identityId, ip, device, time.Hour*24*7)
+		session, err := h.createSession(identityId, ip, device)
 		if err != nil {
 			log.Print(err)
 			w.WriteHeader(http.StatusInternalServerError)
@@ -101,9 +110,9 @@ func (h *Handler) sendLoginEmail(to, link string) error {
 		return errors.New("mailer not configured")
 	}
 	return h.mailer.Send(email.Email{
-		To: to,
+		To:      to,
 		Subject: "Your sign-in link",
-		Text: "Open this link to finish signing in:\n\n" + link + "\n\nIf you didn't request this, you can ignore this email.",
+		Text:    "Open this link to finish signing in:\n\n" + link + "\n\nIf you didn't request this, you can ignore this email.",
 		// todo(jc): Replace this with a template?
 		HTML: `<p>Open this link to finish signing in:</p>` +
 			`<p><a href="` + link + `">` + link + `</a></p>` +
@@ -112,50 +121,30 @@ func (h *Handler) sendLoginEmail(to, link string) error {
 }
 
 func (h *Handler) issueLoginCode(email string) (string, error) {
-	code, err := randomToken()
-	if err != nil {
-		return "", err
-	}
-
-	tx, err := h.db.Begin()
-	if err != nil {
-		return "", err
-	}
-	defer tx.Rollback()
-
-	// Find the existing identity for this email, or create one on first sight.
-	var identityId int64
-	err = tx.QueryRow("SELECT id FROM identities WHERE email = ?", email).Scan(&identityId)
+	var identityId string
+	err := h.db.QueryRow("SELECT uuid FROM identities WHERE email = ?", email).Scan(&identityId)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
+		// First time using this email, create a new account.
 		name := email
 		if i := strings.IndexByte(email, '@'); i > 0 {
 			name = email[:i]
 		}
-		result, err := tx.Exec("INSERT INTO identities (name, email) VALUES (?, ?)", name, email)
+		identityId, err = h.createIdentity(name, email)
 		if err != nil {
-			return "", err
-		}
-		if identityId, err = result.LastInsertId(); err != nil {
 			return "", err
 		}
 	case err != nil:
 		return "", err
 	}
 
-	if _, err := tx.Exec(
-		"UPDATE identities SET temporary_code = ?, code_expires_at = ? WHERE id = ?",
-		hashToken(code), time.Now().Add(temporaryCodeTTL).Unix(), identityId,
-	); err != nil {
+	code, err := h.newTemporaryCode(identityId, emailPurpose)
+	if err != nil {
 		return "", err
 	}
-
-	return code, tx.Commit()
+	return code, nil
 }
 
-// redeemLoginCode looks up the identity holding this code, clears it, and
-// returns the identity if the code hadn't expired — all in one transaction, so
-// a link works at most once even under concurrent requests.
 func (h *Handler) redeemLoginCode(code string) (string, error) {
 	if code == "" {
 		return "", errors.New("empty code")
@@ -168,26 +157,14 @@ func (h *Handler) redeemLoginCode(code string) (string, error) {
 	}
 	defer tx.Rollback()
 
-	var identityId string
-	var expiresAt int64
-	if err := tx.QueryRow(
-		"SELECT id, code_expires_at FROM identities WHERE temporary_code = ?", hashed,
-	).Scan(&identityId, &expiresAt); err != nil {
-		return "", err
-	}
-
-	// Prevent concurrent attempts.
-	result, err := tx.Exec(
-		"UPDATE identities SET temporary_code = NULL, code_expires_at = NULL WHERE temporary_code = ?",
-		hashed,
-	)
+	temporaryCode, err := getTemporaryCodeWithTx(tx, hashed, emailPurpose)
 	if err != nil {
 		return "", err
 	}
-	if n, err := result.RowsAffected(); err != nil {
+
+	err = deleteTemporaryCodeWithTx(tx, temporaryCode.Id)
+	if err != nil {
 		return "", err
-	} else if n != 1 {
-		return "", errors.New("login code already used")
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -196,20 +173,9 @@ func (h *Handler) redeemLoginCode(code string) (string, error) {
 
 	// Check expiry only after the code is spent, so an expired link can't be
 	// retried against the same value.
-	if time.Now().Unix() >= expiresAt {
+	if time.Now().Unix() >= temporaryCode.ExpiresAt {
 		return "", errors.New("login code expired")
 	}
 
-	return identityId, nil
+	return temporaryCode.IdentityId, nil
 }
-
-func renderCheckEmail(w http.ResponseWriter, email string) {
-	fmt.Fprintf(w, `<!doctype html>
-	<html>
-		<head></head>
-		<body>
-			<p>Check <strong>%s</strong> for a link to finish signing in.</p>
-		</body>
-	</html>`, template.HTMLEscapeString(email))
-}
-

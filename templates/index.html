@@ -1,0 +1,16 @@
+<!doctype html>
+<html>
+  <head></head>
+  <body>
+    {{if .Flash}}
+      <p><i>{{.Flash}}</i></p>
+    {{end}}
+    <p><a href="/oauth/login/google/">Continue with Google</a><p>
+    <form action="/login/email/" method="post">
+      <input type="email" name="email" required />
+      <button type="submit">Continue with email</button>
+    </form>
+    <p><a href="/login/saml/">Continue with SAML SSO</a></p>
+    <p><a href="/login/passkey/">Login with passkey</a></p>
+  </body>
+</html>

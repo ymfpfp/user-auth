@@ -23,22 +23,22 @@ const (
 
 type JWTHeader struct {
 	Alg AlgType `json:"alg"`
-	Kid string `json:"kid"`
-	Typ string `json:"typ"`
+	Kid string  `json:"kid"`
+	Typ string  `json:"typ"`
 }
 
 type JWT struct {
-	Header JWTHeader
+	Header  JWTHeader
 	Payload []byte
 	// Combined `{Header}.{Payload}` as bytes.
-	Input []byte
+	Input     []byte
 	Signature []byte
 }
 
 type JWTError string
 
 const (
-	InvalidJWT JWTError = "Invalid JWT"
+	InvalidJWT     JWTError = "Invalid JWT"
 	UnsupportedJWT JWTError = "Unsupported JWT"
 )
 
@@ -123,7 +123,7 @@ func (jwt JWT) verifyRSA(jwk JWK) (bool, error) {
 	}
 
 	var hash crypto.Hash
-	var hashed []byte 
+	var hashed []byte
 	switch jwk.Alg {
 	case RS256:
 		hash = crypto.SHA256
@@ -142,9 +142,9 @@ func (jwt JWT) verifyRSA(jwk JWK) (bool, error) {
 	return true, nil
 }
 
-func (jwt JWT) Verify(jwk JWK) (bool, error) {	
+func (jwt JWT) Verify(jwk JWK) (bool, error) {
 	switch jwk.Alg {
-	case RS256: 
+	case RS256:
 		return jwt.verifyRSA(jwk)
 	}
 	return false, UnsupportedJWT

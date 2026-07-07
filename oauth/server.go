@@ -1,3 +1,3 @@
 package oauth
 
-// Implement our own 
+// Implement our own

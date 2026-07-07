@@ -6,4 +6,3 @@ const (
 	tokensKey contextKey = "tokens"
 	claimsKey contextKey = "claims"
 )
-

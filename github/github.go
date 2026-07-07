@@ -14,9 +14,9 @@ var githubAPIClient = &http.Client{Timeout: 10 * time.Second}
 
 // User is a subset of the GitHub authenticated-user representation.
 type User struct {
-	Id    int64  `json:"id"`
+	Id       int64  `json:"id"`
 	Username string `json:"login"`
-	Name  string `json:"name"`
+	Name     string `json:"name"`
 }
 
 func GetUser(accessToken string) (User, error) {
@@ -25,7 +25,7 @@ func GetUser(accessToken string) (User, error) {
 		return User{}, err
 	}
 
-	req.Header.Set("Authorization", "Bearer " + accessToken)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "user-auth")
 
@@ -53,7 +53,7 @@ func GetEmail(accessToken string) (string, error) {
 		return "", err
 	}
 
-	req.Header.Set("Authorization", "Bearer " + accessToken)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "user-auth")
 
@@ -88,9 +88,9 @@ func GetEmail(accessToken string) (string, error) {
 }
 
 type Repo struct {
-	Id int64  `json:"id"`
-	Name string `json:"name"`
-	Url string `json:"html_url"`
+	Id          int64  `json:"id"`
+	Name        string `json:"name"`
+	Url         string `json:"html_url"`
 	Description string `json:"description"`
 }
 
@@ -131,7 +131,7 @@ func getRepoPage(accessToken, url string) ([]Repo, error) {
 
 	// GitHub authenticates the caller from this bearer token, and requires
 	// both an Accept and a User-Agent header (it rejects requests without one).
-	req.Header.Set("Authorization", "Bearer " + accessToken)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "user-auth")
 
@@ -152,4 +152,3 @@ func getRepoPage(accessToken, url string) ([]Repo, error) {
 	}
 	return repos, nil
 }
-
