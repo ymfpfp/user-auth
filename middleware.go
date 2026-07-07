@@ -4,21 +4,23 @@ import (
 	"context"
 	"io"
 	"net/http"
-
-	"github.com/ymfpfp/user-auth/data"
-	"github.com/ymfpfp/user-auth/utils"
 )
 
-type contextKey string
-
-const sessionKey contextKey = "session"
-
-func SessionFromContext(ctx context.Context) (data.Session, bool) {
-	session, ok := ctx.Value(sessionKey).(data.Session)
-	return session, ok
+func clearCookies(w http.ResponseWriter, r *http.Request) {
+	for _, cookie := range r.Cookies() {
+		http.SetCookie(w, &http.Cookie{
+			Name:     cookie.Name,
+			Value:    "",
+			HttpOnly: true,
+			MaxAge:   -1,
+			Path:     "/",
+			// Secure: true,
+			SameSite: http.SameSiteLaxMode,
+		})
+	}
 }
 
-func DrainAndClose(next http.Handler) http.Handler {
+func drainAndClose(next http.Handler) http.Handler {
 	return http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			next.ServeHTTP(w, r)
@@ -28,20 +30,29 @@ func DrainAndClose(next http.Handler) http.Handler {
 	)
 }
 
+type contextKey string
+
+const sessionKey contextKey = "session"
+
+func sessionFromContext(ctx context.Context) (Session, bool) {
+	session, ok := ctx.Value(sessionKey).(Session)
+	return session, ok
+}
+
 // Gate a handler and inject session data in.
-func (h *Handler) Authenticated(next http.Handler) http.Handler {
+func (h *Handler) authenticated(next http.Handler) http.Handler {
 	return http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			sessionId, err := r.Cookie("session")
 			if err != nil {
-				utils.ClearCookies(w, r)
+				clearCookies(w, r)
 				http.Redirect(w, r, "/", http.StatusSeeOther)
 				return
 			}
 
-			session, err := h.GetSession(sessionId.Value)
+			session, err := h.getSession(sessionId.Value)
 			if err != nil {
-				utils.ClearCookies(w, r)
+				clearCookies(w, r)
 				http.Redirect(w, r, "/", http.StatusSeeOther)
 				return
 			}

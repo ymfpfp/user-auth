@@ -19,7 +19,7 @@
         {{end}}
       </div>
     {{else}}
-      <p><a href="/connect/github">Connect GitHub</a></p>
+      <p><a href="/oauth/connect/github">Connect GitHub</a></p>
     {{end}}
     <h2>Active Sessions</h2>
     {{range .Sessions}}
@@ -43,24 +43,31 @@
     <p><a href="/logout">Log out</a></p>
     <script>
       const newPasskeyEle = document.querySelector("#new-passkey");
+      console.log(new TextEncoder().encode({{.Challenge}}));
       newPasskeyEle.addEventListener("click", event => {
         event.preventDefault();
-        // We want to ask for new passkey.
+        // We want to ask for a new passkey, we get back the public key and a key handle.
+        // This returns [`PublicKeyCredential`](https://developer.mozilla.org/en-US/docs/Web/API/PublicKeyCredential).
+        // todo(jc): Thoughts on attestation.
         navigator.credentials.create({
           publicKey: {
-            challenge: new Uint8Array([0]).buffer,
+            challenge: new TextEncoder().encode({{.Challenge}}).buffer,
             pubKeyCredParams: [{
               type: "public-key",
-              alg: -7,
+              alg: -7, // ES256
             }],
+            // Just using generic value.
             rp: {name: window.location.hostname, id: window.location.hostname},
             user: {
-              id: new Uint8Array(1),
-              name: "user",
-              displayName: "",
+              id: new TextEncoder().encode({{.Id}}),
+              name: {{.Email}},
+              displayName: {{.Name}},
             }
           }
-        }).then(console.log, console.log);
+        }).then(passkey => {
+
+          console.log(passkey);
+        }, console.log);
       });
     </script>
   </body>

@@ -19,8 +19,7 @@ func TokensFromContext (ctx context.Context) (Tokens, bool) {
 
 func randomState() (string, error) {
 	b := make([]byte, 16)
-	_, err := rand.Read(b)
-	if err != nil {
+	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil

@@ -12,10 +12,8 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
-	"github.com/ymfpfp/user-auth/data"
+	"github.com/ymfpfp/user-auth/email"
 	"github.com/ymfpfp/user-auth/github"
-	"github.com/ymfpfp/user-auth/oauth"
-	"github.com/ymfpfp/user-auth/utils"
 )
 
 type Config struct {
@@ -33,7 +31,7 @@ type Config struct {
 type Handler struct {
 	db *sql.DB
 	config *Config
-	mailer *Mailer
+	mailer *email.Mailer
 }
 
 func main() {
@@ -66,141 +64,27 @@ func main() {
 		RootKey: rootKey,
 	}
 
-	db := data.NewDb()
+	db := newDB()
 	defer db.Close()
 
 	h := &Handler{
 		db: db,
 		config: &config,
-		mailer: NewSESMailerFromEnv(),
+		mailer: email.NewSESMailerFromEnv(),
 	}
 
 	// Set up new server mux.
 	serveMux := http.NewServeMux()
 
 	serveMux.HandleFunc("/", index)
-	serveMux.HandleFunc("/login/email", h.emailLogin)
-	serveMux.HandleFunc("/login/email/{code}", h.emailVerify)
-	serveMux.Handle("/loggedIn", h.Authenticated(http.HandlerFunc(h.loggedIn)))
-	serveMux.Handle("/logout", h.Authenticated(http.HandlerFunc(h.logout)))
+	serveMux.Handle("/loggedIn", h.authenticated(http.HandlerFunc(h.loggedIn)))
+	serveMux.Handle("/logout", h.authenticated(http.HandlerFunc(h.logout)))
 
-	googleConfig, err := oauth.GetConfig(oauth.GoogleConfigEndpoint)
-	if err != nil {
-		log.Fatal("Unable to configure Google OIDC ", err)
-	}
-	googleClient := oauth.Client{
-		Callback: "/oauth2/google",
-		Id:       config.GoogleClientId,
-		Scopes:   "openid email profile",
-		Secret:   config.GoogleClientSecret,
-	}
-	googleProvider := oauth.NewOIDCProvider(googleConfig, googleClient)
-	serveMux.Handle("/login/google", googleProvider.Redirect())
-	serveMux.Handle("/oauth2/google", googleProvider.Callback(http.HandlerFunc(
-		func(w http.ResponseWriter, r *http.Request) {
-			ctx := r.Context()
-			claims, ok := oauth.ClaimsFromContext(ctx)
-			if !ok {
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
+	// Don't strip prefix for pendantry.
+	serveMux.Handle("/oauth/", oauthMux(h))
+	serveMux.Handle("/login/email/", http.StripPrefix("/login/email", emailMux(h)))
 
-			// Upsert user and provider.
-			id, _, err := h.UpsertLoginFromClaims(claims)
-			if id < 0 {
-				log.Print(err)
-				w.WriteHeader(http.StatusForbidden)
-				return
-			}
-
-			// Create a new session.
-			// Get device and IP addr.
-			device := r.UserAgent()
-			ip, _, err := net.SplitHostPort(r.RemoteAddr)
-			if err != nil {
-				ip = r.RemoteAddr
-			}
-
-			session, err := h.CreateSession(id, ip, device, time.Hour * 24 * 7)
-			if err != nil {
-				log.Print(err)
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-
-			if err := h.RecordActivity(id, "Logged in via Google from " + ip); err != nil {
-				log.Print(err)
-			}
-
-			// Return session cookie.
-			http.SetCookie(w, &http.Cookie{
-				Name: "session",
-				Value: session,
-				HttpOnly: true,
-				Path: "/",
-			})
-
-			http.Redirect(w, r, "/loggedIn", http.StatusFound)
-		},
-	)))
-
-	// In typical OAuth libraries, these are pre-filled properly for you;
-	// here we'll fill them just with what we need.
-	//
-	// GitHub access tokens are long-lived. Typical OAuth apps will have get a
-	// refresh token to maintain longevity; in that case, we'd also store a refresh token in
-	// the db.
-	githubConfig := oauth.Config{
-		Issuer: "GitHub",
-		AuthorizationEndpoint: "https://github.com/login/oauth/authorize",
-		TokenEndpoint: "https://github.com/login/oauth/access_token",
-		ResponseTypesSupported: []string{"code"},
-		ScopesSupported: []string{"repo", "read:user", "user:email"},
-	}
-	githubClient := oauth.Client{
-		Callback: "/oauth2/github",
-		Id: config.GithubClientId,
-		Scopes: "repo read:user user:email",
-		Secret: config.GithubClientSecret,
-	}
-	githubProvider := oauth.NewGithubOIDCProvider(githubConfig, githubClient)
-	serveMux.Handle("/connect/github", h.Authenticated(githubProvider.Redirect()))
-	serveMux.Handle("/oauth2/github", h.Authenticated(githubProvider.Callback(http.HandlerFunc(
-		func(w http.ResponseWriter, r *http.Request) {
-			// todo(jc): Implement "Connect with GitHub" and remove auth gate.
-
-			ctx := r.Context()
-			session, ok := SessionFromContext(ctx)
-			if !ok {
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-
-			tokens, ok := oauth.TokensFromContext(ctx)
-			if !ok {
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-
-			claims, ok := oauth.ClaimsFromContext(ctx)
-			if !ok {
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-
-			// Store GitHub as a provider.
-			err := h.LinkProvider(session.IdentityId, claims.Issuer, claims.Subject, tokens.AccessToken)
-			if err != nil {
-				log.Print(err)
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-
-			http.Redirect(w, r, "/", http.StatusSeeOther)
-		},
-	))))
-
-	mux := DrainAndClose(serveMux)
+	mux := drainAndClose(serveMux)
 
 	server := &http.Server{
 		Addr: "localhost:" + config.Port,
@@ -248,7 +132,7 @@ func index(w http.ResponseWriter, r *http.Request) {
 	<html>
 		<head></head>
 		<body>
-			<p><a href="/login/google">Continue with Google</a><p>
+			<p><a href="/oauth/login/google">Continue with Google</a><p>
 			<form action="/login/email" method="POST">
 				<input type="email" name="email" required />
 				<button>Continue with email</button>
@@ -262,22 +146,22 @@ func index(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) loggedIn(w http.ResponseWriter, r *http.Request) {
-	activeSession, ok := SessionFromContext(r.Context())
+	activeSession, ok := sessionFromContext(r.Context())
 	if !ok {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
 
 	// Get active sessions.
-	sessions, _ := h.GetActiveSessions(activeSession.IdentityId)
+	sessions, _ := h.getActiveSessions(activeSession.IdentityId)
 
 	// Get recent activity.
-	activities, _ := h.GetRecentActivities(activeSession.IdentityId, 10)
+	activities, _ := h.getRecentActivities(activeSession.IdentityId, 10)
 
 	// Try to get repos. Skipped silently if GitHub isn't connected (no token)
 	// or the call fails — the page still renders, just without repos.
 	var repos []github.Repo
-	if token, err := h.GetProviderToken(activeSession.IdentityId, "GitHub"); err != nil {
+	if token, err := h.getProviderToken(activeSession.IdentityId, "GitHub"); err != nil {
 		log.Print(err)
 	} else if token != "" {
 		if repos, err = github.GetRepos(token); err != nil {
@@ -285,9 +169,16 @@ func (h *Handler) loggedIn(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	log.Print(repos)
+	// Generate a challenge for passkey, if user doesn't already have one.
+	challenge, err := h.passkeyChallenge(activeSession.IdentityId)
+	if err != nil {
+		log.Print(err)
+		w.WriteHeader(http.StatusInternalServerError)
+	}
 
-	err := htmlTemplates.ExecuteTemplate(w, "loggedIn.html", map[string]any{
+	err = htmlTemplates.ExecuteTemplate(w, "loggedIn.html", map[string]any{
+		"Id": activeSession.IdentityId,
+		"Challenge": challenge,
 		"Name": activeSession.Name,
 		"Email": activeSession.Email,
 		"Sessions": sessions,
@@ -301,18 +192,18 @@ func (h *Handler) loggedIn(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
-	activeSession, ok := SessionFromContext(r.Context())
+	activeSession, ok := sessionFromContext(r.Context())
 	if !ok {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
 
-	h.RevokeSession(activeSession.Id)
+	h.revokeSession(activeSession.Id)
 
-	if err := h.RecordActivity(activeSession.IdentityId, "Logged out"); err != nil {
+	if err := h.recordActivity(activeSession.IdentityId, "Logged out"); err != nil {
 		log.Print(err)
 	}
 
-	utils.ClearCookies(w, r)
+	clearCookies(w, r)
 	http.Redirect(w, r, "/", http.StatusFound)
 }
