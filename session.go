@@ -14,7 +14,7 @@ func (h *Handler) createSession(identityId string, ip, device string) (string, e
 
 	now := time.Now().Unix()
 	_, err = h.db.Exec(
-		`INSERT INTO sessions (id, identity_id, ip_address, device, created, expires_at)
+		`INSERT INTO sessions (id, identity_id, ip_address, device, created_at, expires_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		hashToken(token), identityId, ip, device, now, now+sessionTTL,
 	)
@@ -27,7 +27,7 @@ func (h *Handler) createSession(identityId string, ip, device string) (string, e
 func (h *Handler) getSession(sessionId string) (Session, error) {
 	var session Session
 	err := h.db.QueryRow(
-		`SELECT s.id, i.name, i.email, s.identity_id, s.ip_address, s.device, s.created, s.expires_at
+		`SELECT s.id, i.name, i.email, s.identity_id, s.ip_address, s.device, s.created_at, s.expires_at
 		 FROM sessions s
 		 JOIN identities i ON i.uuid = s.identity_id
 		 WHERE s.id = ?`,
@@ -39,7 +39,7 @@ func (h *Handler) getSession(sessionId string) (Session, error) {
 		&session.IdentityId,
 		&session.IpAddr,
 		&session.Device,
-		&session.Created,
+		&session.CreatedAt,
 		&session.ExpiresAt,
 	)
 	if err != nil {
@@ -65,7 +65,7 @@ func (h *Handler) getActiveSessions(identityId string) ([]Session, error) {
 			&session.IdentityId,
 			&session.IpAddr,
 			&session.Device,
-			&session.Created,
+			&session.CreatedAt,
 			&session.ExpiresAt,
 		)
 		if err != nil {

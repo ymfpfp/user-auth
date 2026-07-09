@@ -83,6 +83,7 @@ func main() {
 	// Don't strip prefix for pendantry.
 	serveMux.Handle("/oauth/", oauthMux(h))
 	serveMux.Handle("/login/email/", http.StripPrefix("/login/email", emailMux(h)))
+	serveMux.Handle("/passkey/", http.StripPrefix("/passkey", passkeyMux(h)))
 
 	mux := drainAndClose(serveMux)
 
@@ -155,6 +156,9 @@ func (h *Handler) loggedIn(w http.ResponseWriter, r *http.Request) {
 	// Get recent activity.
 	activities, _ := h.getRecentActivities(activeSession.IdentityId, 10)
 
+	// Get passkeys.
+	passkeys, _ := h.getPasskeys(activeSession.IdentityId)
+
 	// Try to get repos. Skipped silently if GitHub isn't connected (no token)
 	// or the call fails — the page still renders, just without repos.
 	var repos []github.Repo
@@ -181,6 +185,7 @@ func (h *Handler) loggedIn(w http.ResponseWriter, r *http.Request) {
 		"Sessions":   sessions,
 		"Activities": activities,
 		"Repos":      repos,
+		"Passkeys":   passkeys,
 	})
 	if err != nil {
 		log.Print(err)

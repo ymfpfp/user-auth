@@ -26,48 +26,100 @@
       <hr>
       <p>{{.IpAddr}}</p>
       <p>{{.Device}}</p>
-      <p>Signed in on {{.Created | date}}</p>
+      <p>Signed in on {{.CreatedAt | date}}</p>
       <p>Expires on {{.ExpiresAt | date}}<p>
       <hr>
     {{end}}
     <h2>Recent Activity</h2>
     {{range .Activities}}
-      <p>{{.Action}} on {{.Created | date}}</p>
+      <p>{{.Action}} on {{.CreatedAt | date}}</p>
     {{else}}
       <p>No recent activity.</p>
     {{end}}
     <hr>
     <p><a href="#">Enable TOTP 2FA</a></p>
     <p><a href="#" id="new-passkey">New passkey</a></p>
+    {{if .Passkeys}}
+      <h2>Passkeys</h2>
+      {{range .Passkeys}}
+        <hr>
+        <p><code>{{.Id}}</code></p>
+        <p>Added on {{.CreatedAt | date}}</p>
+      {{end}}
+    {{end}}
     <hr>
     <p><a href="/logout">Log out</a></p>
     <script>
       const newPasskeyEle = document.querySelector("#new-passkey");
-      console.log(new TextEncoder().encode({{.Challenge}}));
-      newPasskeyEle.addEventListener("click", event => {
+      newPasskeyEle.addEventListener("click", async event => {
         event.preventDefault();
-        // We want to ask for a new passkey, we get back the public key and a key handle.
-        // This returns [`PublicKeyCredential`](https://developer.mozilla.org/en-US/docs/Web/API/PublicKeyCredential).
-        // todo(jc): Thoughts on attestation.
-        navigator.credentials.create({
-          publicKey: {
-            challenge: new TextEncoder().encode({{.Challenge}}).buffer,
-            pubKeyCredParams: [{
-              type: "public-key",
-              alg: -7, // ES256
-            }],
-            // Just using generic value.
-            rp: {name: window.location.hostname, id: window.location.hostname},
-            user: {
-              id: new TextEncoder().encode({{.Id}}),
-              name: {{.Email}},
-              displayName: {{.Name}},
+        
+        try {
+          // We want to ask for a new passkey, we get back the public key and a key handle.
+          // This returns [`PublicKeyCredential`](https://developer.mozilla.org/en-US/docs/Web/API/PublicKeyCredential).
+          // todo(jc): Thoughts on attestation.
+          // todo(jc): Do we need to exclude credentials?
+          const passkey = await navigator.credentials.create({
+            publicKey: {
+              authenticatorSelection: {
+                // Enforces discoverable credentials.
+                residentKey: "required",
+                userVerification: "required"
+              },
+              challenge: new TextEncoder().encode({{.Challenge}}).buffer,
+              pubKeyCredParams: [{
+                type: "public-key",
+                alg: -7, // ES256
+              }],
+              // Just using generic value.
+              rp: {
+                // Deprecated - my browser still asks for this.
+                name: window.location.hostname, 
+                id: window.location.hostname
+              },
+              user: {
+                id: new TextEncoder().encode({{.Id}}),
+                // Deprecated - my browser still asks for this.
+                name: {{.Email}},
+                displayName: {{.Name}},
+              }
             }
-          }
-        }).then(passkey => {
+          });
 
-          console.log(passkey);
-        }, console.log);
+          const clientDataJSON = String.fromCharCode(
+            ...new Uint8Array(passkey.response.clientDataJSON)
+          );
+          const attestationObject = String.fromCharCode(
+            ...new Uint8Array(passkey.response.attestationObject)
+          );
+
+          // We want to upload this to /passkey/new.
+          const creation = await fetch("/passkey/new", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              // What do we want in here? We want:
+              // * `id`, credential id encoded as base64, we need to store this.
+              // * `clientDataJSON`, containing:
+              //   * `challenge`: Prevent replay attacks, we need to verify this.
+              //   * `origin`: Prevent phishing attacks, we need to verify this.  
+              // * `attestationObject`, which is CBOR-encoded 
+              //   * `attestedCredentialData`, containing: 
+              //     * `credentialPublicKey`: This is the public key, we need to store this.
+              id: passkey.id,
+              clientDataJSON: btoa(clientDataJSON),
+              attestationObjectCBOR: btoa(attestationObject),
+            })
+          });
+
+          // Refresh the page, if passkey was successfully created it should show up. 
+          window.location.reload();
+        } catch (err) {
+          // todo(jc)
+          console.error("passkey creation failed:", err);
+        }
       });
     </script>
   </body>

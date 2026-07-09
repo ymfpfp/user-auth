@@ -5,12 +5,71 @@
     {{if .Flash}}
       <p><i>{{.Flash}}</i></p>
     {{end}}
-    <p><a href="/oauth/login/google/">Continue with Google</a><p>
+    <p><a href="/oauth/login/google">Continue with Google</a><p>
     <form action="/login/email/" method="post">
       <input type="email" name="email" required />
       <button type="submit">Continue with email</button>
     </form>
-    <p><a href="/login/saml/">Continue with SAML SSO</a></p>
-    <p><a href="/login/passkey/">Login with passkey</a></p>
+    <p><a href="/login/saml">Continue with SAML SSO</a></p>
+    <p><a href="#" id="login-passkey">Login with passkey</a></p>
+    <script>
+      const loginPasskeyEle = document.querySelector("#login-passkey");
+      loginPasskeyEle.addEventListener("click", async event => {
+        event.preventDefault();
+        try {
+          // We need to grab a temporary challenge, this prevents replay attacks.
+          // Since we're not logged in we need to attach that to a temporary session.
+          const {passkeySession, passkeyChallenge} = 
+            await (await fetch("/passkey/options")).json();
+
+          // We only support FIDO2 here, which has the concept of discoverable credentials.
+          // This is indicated by `rpId`, which the browser uses over CTAP2 to get 
+          // authenticators to return possible credentials for this relying party.
+          const passkey = await navigator.credentials.get({
+            publicKey: {
+              challenge: new Uint8Array(passkeyChallenge).buffer,
+              rpId: window.location.hostname,
+              userVerification: "required",
+            }
+          });
+
+          const clientDataJSON = String.fromCharCode(
+            ...new Uint8Array(passkey.response.clientDataJSON)
+          );
+          const authenticatorData = String.fromCharCode(
+            ...new Uint8Array(passkey.response.authenticatorData)
+          );
+          const signature = String.fromCharCode(
+            ...new Uint8Array(passkey.response.signature)
+          );
+
+          const verification = await fetch("/passkey/login", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              session: passkeySession,
+              // What do we want in here? We want:
+              // * `id`, credential id to match up in db.
+              // * `clientDataJSON`, containing:
+              //   * `challenge`: Prevent replay attacks, we need to verify this.
+              //   * `origin`: Prevent phishing attacks, we need to verify this.
+              // We need to combine `authenticatorData` with SHA256(`clientDataJSON`)
+              // and verify the signature on the server with the public key.
+              id: passkey.id,
+              clientDataJSON: btoa(clientDataJSON),
+              authenticatorData: btoa(authenticatorData),
+              signature: btoa(signature),
+            })
+          })
+
+          window.location.reload();
+        } catch (err) {
+          // todo(jc)
+          console.log(err);
+        }
+      });
+    </script>
   </body>
 </html>

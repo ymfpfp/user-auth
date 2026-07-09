@@ -18,7 +18,9 @@ const (
 
 	CREATE TABLE IF NOT EXISTS codes (
 		id INTEGER PRIMARY KEY,
-		identity_id TEXT NOT NULL,
+		-- Logging in with a passkey means we have to generate a temp session id,
+		-- unattached to a user. 
+		identity_id TEXT,
 		purpose TEXT NOT NULL,
 		code TEXT NOT NULL,
 		-- Backup codes don't necessarily have these.
@@ -27,6 +29,18 @@ const (
 	);
 
 	CREATE INDEX IF NOT EXISTS user_codes ON codes(identity_id, code);
+
+	CREATE TABLE IF NOT EXISTS passkeys (
+		id TEXT,
+		identity_id TEXT NOT NULL,
+		-- This is the public key.
+		credential BLOB NOT NULL,
+		created_at INTEGER NOT NULL,
+		FOREIGN KEY (identity_id) REFERENCES identities(id),
+		PRIMARY KEY (identity_id, id)
+	);
+
+	CREATE INDEX IF NOT EXISTS user_passkeys ON passkeys(identity_id);
 
 	CREATE TABLE IF NOT EXISTS providers (
 		identity_id TEXT NOT NULL,
@@ -46,7 +60,7 @@ const (
 		id TEXT PRIMARY KEY,
 		ip_address TEXT,
 		device TEXT,
-		created INTEGER NOT NULL,
+		created_at INTEGER NOT NULL,
 		expires_at INTEGER NOT NULL,
 		FOREIGN KEY (identity_id) REFERENCES identities(id)
 	);
@@ -57,7 +71,7 @@ const (
 		identity_id TEXT NOT NULL,
 		id INTEGER PRIMARY KEY,
 		action TEXT NOT NULL,
-		created INTEGER NOT NULL, 
+		created_at INTEGER NOT NULL, 
 		FOREIGN KEY (identity_id) REFERENCES identities(id)
 	);
 	`
@@ -67,7 +81,7 @@ type Activity struct {
 	Id         int64
 	IdentityId string
 	Action     string
-	Created    int64
+	CreatedAt  int64
 }
 
 type Session struct {
@@ -78,7 +92,7 @@ type Session struct {
 	IdentityId string
 	IpAddr     string
 	Device     string
-	Created    int64
+	CreatedAt  int64
 	ExpiresAt  int64
 }
 
@@ -88,6 +102,13 @@ type TemporaryCode struct {
 	Purpose    string
 	Code       string
 	ExpiresAt  int64
+}
+
+type Passkey struct {
+	Id         string
+	IdentityId string
+	Credential []byte
+	CreatedAt  int64
 }
 
 func newDB() *sql.DB {

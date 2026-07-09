@@ -90,3 +90,17 @@ func (h *Handler) authenticated(next http.Handler) http.Handler {
 		},
 	)
 }
+
+// Gate this handler by POST.
+func (h *Handler) post(next http.Handler) http.Handler {
+	return http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				w.Header().Set("Allow", "POST")
+				w.WriteHeader(http.StatusMethodNotAllowed)
+			}
+
+			next.ServeHTTP(w, r)
+		},
+	)
+}

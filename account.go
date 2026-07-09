@@ -116,8 +116,25 @@ func (h *Handler) upsertLogin(issuer, subject, name, email string) (string, bool
 	case err == nil:
 		return identityId, false, nil // Existing user, simply just return the matching identity.
 	case errors.Is(err, sql.ErrNoRows):
-		id, err := h.createIdentityWithProvider(issuer, subject, name, email, nil)
-		return id, true, err
+		err := h.db.QueryRow(
+			"SELECT uuid FROM identities WHERE email = ?",
+			email,
+		).Scan(&identityId)
+		switch {
+		case err == nil:
+			if _, err := h.db.Exec(
+				"INSERT INTO providers (identity_id, issuer, subject) VALUES (?, ?, ?)",
+				identityId, issuer, subject,
+			); err != nil {
+				return "", false, err
+			}
+			return identityId, false, nil
+		case errors.Is(err, sql.ErrNoRows):
+			id, err := h.createIdentityWithProvider(issuer, subject, name, email, nil)
+			return id, true, err
+		default:
+			return "", false, err
+		}
 	default:
 		return "", false, err
 	}

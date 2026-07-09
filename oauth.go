@@ -129,6 +129,10 @@ func oauthMux(h *Handler) *http.ServeMux {
 				return
 			}
 
+			if err := h.recordActivity(session.IdentityId, "Connected GitHub"); err != nil {
+				log.Print(err)
+			}
+
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 		},
 	))))

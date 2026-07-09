@@ -113,6 +113,21 @@ func (h *Handler) getTemporaryCode(code, purpose string) (TemporaryCode, error) 
 	return temporaryCode, nil
 }
 
+func (h *Handler) getTemporaryCodeFromId(id int64) (TemporaryCode, error) {
+	var temporaryCode TemporaryCode
+	err := h.db.QueryRow("SELECT * FROM codes WHERE id = ?", id).Scan(
+		&temporaryCode.Id,
+		&temporaryCode.IdentityId,
+		&temporaryCode.Purpose,
+		&temporaryCode.Code,
+		&temporaryCode.ExpiresAt,
+	)
+	if err != nil {
+		return temporaryCode, nil
+	}
+	return temporaryCode, nil
+}
+
 func getTemporaryCodeWithTx(tx *sql.Tx, code, purpose string) (TemporaryCode, error) {
 	var temporaryCode TemporaryCode
 	err := tx.QueryRow(
@@ -129,6 +144,11 @@ func getTemporaryCodeWithTx(tx *sql.Tx, code, purpose string) (TemporaryCode, er
 		return temporaryCode, err
 	}
 	return temporaryCode, nil
+}
+
+func (h *Handler) deleteTemporaryCode(id int64) error {
+	_, err := h.db.Exec("DELETE FROM codes WHERE id = ?", id)
+	return err
 }
 
 func deleteTemporaryCodeWithTx(tx *sql.Tx, id int64) error {

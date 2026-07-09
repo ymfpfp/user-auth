@@ -6,7 +6,7 @@ import (
 
 func (h *Handler) recordActivity(identityId string, action string) error {
 	_, err := h.db.Exec(
-		"INSERT INTO activities (identity_id, action, created) VALUES (?, ?, ?)",
+		"INSERT INTO activities (identity_id, action, created_at) VALUES (?, ?, ?)",
 		identityId, action, time.Now().Unix(),
 	)
 	return err
@@ -16,10 +16,10 @@ func (h *Handler) getRecentActivities(identityId string, limit int) ([]Activity,
 	var activities []Activity
 
 	rows, err := h.db.Query(
-		`SELECT id, identity_id, action, created
+		`SELECT id, identity_id, action, created_at
 		 FROM activities
 		 WHERE identity_id = ?
-		 ORDER BY created DESC
+		 ORDER BY created_at DESC
 		 LIMIT ?`,
 		identityId, limit,
 	)
@@ -34,7 +34,7 @@ func (h *Handler) getRecentActivities(identityId string, limit int) ([]Activity,
 			&activity.Id,
 			&activity.IdentityId,
 			&activity.Action,
-			&activity.Created,
+			&activity.CreatedAt,
 		); err != nil {
 			return activities, err
 		}

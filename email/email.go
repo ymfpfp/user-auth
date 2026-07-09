@@ -54,6 +54,8 @@ func NewSESMailerFromEnv() *Mailer {
 		Host: host,
 		Port: port,
 		From: from,
+		// `PlainAuth` only transmits the password once the connection is
+		// encrypted; net/smtp enforces this, see below in `Send`.
 		Auth: Auth{Username: username, Password: password},
 	}
 }

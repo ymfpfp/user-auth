@@ -17,13 +17,7 @@ import (
 func emailMux(h *Handler) *http.ServeMux {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			w.Header().Set("Allow", "POST")
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-
+	mux.Handle("/", h.post(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil {
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 			return
@@ -67,7 +61,8 @@ func emailMux(h *Handler) *http.ServeMux {
 		}
 
 		http.Redirect(w, r, "/", http.StatusSeeOther)
-	})
+	})))
+
 	mux.HandleFunc("/{code}", func(w http.ResponseWriter, r *http.Request) {
 		identityId, err := h.redeemLoginCode(r.PathValue("code"))
 		if err != nil {
