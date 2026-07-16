@@ -4,6 +4,10 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"time"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func clearCookies(w http.ResponseWriter, r *http.Request) {
@@ -56,9 +60,64 @@ func drainAndClose(next http.Handler) http.Handler {
 	)
 }
 
+// Logging middleware.
+
+// Intercept status code.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (recorder *statusRecorder) WriteHeader(code int) {
+	recorder.status = code
+	recorder.ResponseWriter.WriteHeader(code)
+}
+
+func (h *Handler) withLogging(next http.Handler) http.Handler {
+	return http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			requestId, err := randomToken()
+			if err != nil {
+
+			}
+			w.Header().Set("X-Request-ID", requestId)
+
+			// Build child logger.
+			logger := h.logger.With(zap.String("request_id", requestId))
+			ctx := context.WithValue(r.Context(), loggerKey, logger)
+
+			recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+
+			defer func() {
+				level := zapcore.InfoLevel
+				switch {
+				case recorder.status >= 500:
+					level = zapcore.ErrorLevel
+				case recorder.status >= 400:
+					level = zapcore.WarnLevel
+				}
+				logger.Log(
+					level,
+					"request",
+					zap.Duration("duration", time.Since(start)),
+					zap.String("ip", r.RemoteAddr),
+					zap.String("method", r.Method),
+					zap.String("path", r.URL.Path),
+					zap.Int("status", recorder.status),
+				)
+			}()
+			next.ServeHTTP(recorder, r.WithContext(ctx))
+		},
+	)
+}
+
 type contextKey string
 
-const sessionKey contextKey = "session"
+const (
+	sessionKey contextKey = "session"
+	loggerKey  contextKey = "logger"
+)
 
 func sessionFromContext(ctx context.Context) (Session, bool) {
 	session, ok := ctx.Value(sessionKey).(Session)
@@ -98,6 +157,7 @@ func (h *Handler) post(next http.Handler) http.Handler {
 			if r.Method != http.MethodPost {
 				w.Header().Set("Allow", "POST")
 				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
 			}
 
 			next.ServeHTTP(w, r)

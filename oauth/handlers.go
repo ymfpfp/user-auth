@@ -90,7 +90,6 @@ func (provider Provider) Redirect() http.Handler {
 			q.Set("state", state)
 			redirect.RawQuery = q.Encode()
 
-			log.Print("Redirecting to ", redirect.String())
 			http.Redirect(w, r, redirect.String(), http.StatusFound)
 		},
 	)

@@ -2,7 +2,6 @@ package main
 
 import (
 	"database/sql"
-	"log"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -111,14 +110,14 @@ type Passkey struct {
 	CreatedAt  int64
 }
 
-func newDB() *sql.DB {
+func newDB() (*sql.DB, error) {
 	db, err := sql.Open("sqlite3", "file:test.db")
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 	_, err = db.Exec(INITIAL)
 	if err != nil {
-		log.Fatal("Failed to set up db ", err)
+		return nil, err
 	}
-	return db
+	return db, nil
 }

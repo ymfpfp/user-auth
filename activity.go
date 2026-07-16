@@ -1,15 +1,26 @@
 package main
 
 import (
+	"context"
 	"time"
+
+	"go.uber.org/zap"
 )
 
-func (h *Handler) recordActivity(identityId string, action string) error {
+func (h *Handler) recordActivity(ctx context.Context, identityId string, action string) {
 	_, err := h.db.Exec(
 		"INSERT INTO activities (identity_id, action, created_at) VALUES (?, ?, ?)",
 		identityId, action, time.Now().Unix(),
 	)
-	return err
+	if err != nil {
+		logger := loggerFromContext(ctx)
+		logger.Error(
+			"record activity",
+			zap.String("identityId", identityId),
+			zap.String("activity", action),
+			zap.Error(err),
+		)
+	}
 }
 
 func (h *Handler) getRecentActivities(identityId string, limit int) ([]Activity, error) {

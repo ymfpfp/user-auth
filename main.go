@@ -14,6 +14,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/ymfpfp/user-auth/email"
 	"github.com/ymfpfp/user-auth/github"
+	"go.uber.org/zap"
 )
 
 type Config struct {
@@ -31,11 +32,19 @@ type Config struct {
 type Handler struct {
 	db     *sql.DB
 	config *Config
+	logger *zap.Logger
 	mailer *email.Mailer
 }
 
 func main() {
 	godotenv.Load()
+
+	logger, err := newLogger()
+	if err != nil {
+		log.Fatal("Unable to set up logger: ", err)
+	}
+	defer func() { _ = logger.Sync() }()
+	zap.ReplaceGlobals(logger)
 
 	port, ok := os.LookupEnv("PORT")
 	if !ok {
@@ -64,12 +73,16 @@ func main() {
 		RootKey: rootKey,
 	}
 
-	db := newDB()
+	db, err := newDB()
+	if err != nil {
+		log.Fatal("Unable to set up db: ", err)
+	}
 	defer db.Close()
 
 	h := &Handler{
 		db:     db,
 		config: &config,
+		logger: logger,
 		mailer: email.NewSESMailerFromEnv(),
 	}
 
@@ -85,7 +98,7 @@ func main() {
 	serveMux.Handle("/login/email/", http.StripPrefix("/login/email", emailMux(h)))
 	serveMux.Handle("/passkey/", http.StripPrefix("/passkey", passkeyMux(h)))
 
-	mux := drainAndClose(serveMux)
+	mux := h.withLogging(drainAndClose(serveMux))
 
 	server := &http.Server{
 		Addr: "localhost:" + config.Port,
@@ -100,15 +113,15 @@ func main() {
 
 	listener, err := net.Listen("tcp", server.Addr)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Unable to start TCP listener: ", err)
 	}
 
-	log.Print("Listening on ", server.Addr)
+	logger.Info("Listening on " + server.Addr)
 	// To serve over TLS, need a trusted signed cert file and a private key.
 	// Generate local test one with mkcert, openssl, etc.
 	err = server.ServeTLS(listener, "cert.pem", "private.pem")
 	if err != http.ErrServerClosed {
-		log.Fatal(err)
+		log.Fatal("Unable to start HTTP server: ", err)
 	}
 }
 
@@ -138,12 +151,14 @@ func index(w http.ResponseWriter, r *http.Request) {
 		"Flash": flashValue,
 	})
 	if err != nil {
-		log.Print(err)
+		logger := loggerFromContext(r.Context())
+		logger.Error("Unable to execute template", zap.Error(err))
 		w.WriteHeader(http.StatusInternalServerError)
 	}
 }
 
 func (h *Handler) loggedIn(w http.ResponseWriter, r *http.Request) {
+	logger := loggerFromContext(r.Context())
 	activeSession, ok := sessionFromContext(r.Context())
 	if !ok {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -163,17 +178,17 @@ func (h *Handler) loggedIn(w http.ResponseWriter, r *http.Request) {
 	// or the call fails — the page still renders, just without repos.
 	var repos []github.Repo
 	if token, err := h.getProviderToken(activeSession.IdentityId, "GitHub"); err != nil {
-		log.Print(err)
+		logger.Error("Unable to get GitHub provider token", zap.Error(err))
 	} else if token != "" {
 		if repos, err = github.GetRepos(token); err != nil {
-			log.Print(err)
+			logger.Error("Unable to get GitHub repos", zap.Error(err))
 		}
 	}
 
 	// Generate a challenge for passkey, if user doesn't already have one.
 	challenge, err := h.passkeyChallenge(activeSession.IdentityId)
 	if err != nil {
-		log.Print(err)
+		logger.Error("Unable to generate passkey challenge", zap.Error(err))
 		w.WriteHeader(http.StatusInternalServerError)
 	}
 
@@ -188,12 +203,14 @@ func (h *Handler) loggedIn(w http.ResponseWriter, r *http.Request) {
 		"Passkeys":   passkeys,
 	})
 	if err != nil {
-		log.Print(err)
+		logger.Error("Unable to render page", zap.Error(err))
 		w.WriteHeader(http.StatusInternalServerError)
 	}
 }
 
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
 	activeSession, ok := sessionFromContext(r.Context())
 	if !ok {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -201,10 +218,7 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.revokeSession(activeSession.Id)
-
-	if err := h.recordActivity(activeSession.IdentityId, "Logged out"); err != nil {
-		log.Print(err)
-	}
+	h.recordActivity(ctx, activeSession.IdentityId, "Logged out")
 
 	clearCookies(w, r)
 	http.Redirect(w, r, "/", http.StatusFound)

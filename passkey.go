@@ -9,13 +9,13 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"log"
 	"math/big"
 	"net"
 	"net/http"
 	"time"
 
 	"github.com/fxamacker/cbor/v2"
+	"go.uber.org/zap"
 )
 
 type CredentialPublicKey struct {
@@ -58,7 +58,6 @@ func (h *Handler) newPasskeyRoute(w http.ResponseWriter, r *http.Request) {
 		AttestationObjectCBOR string `json:"attestationObjectCBOR"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		log.Print(err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
@@ -70,7 +69,6 @@ func (h *Handler) newPasskeyRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	var clientData ClientData
 	if err := json.Unmarshal(clientDataJSON, &clientData); err != nil {
-		log.Print(err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
@@ -79,7 +77,6 @@ func (h *Handler) newPasskeyRoute(w http.ResponseWriter, r *http.Request) {
 
 	attestationObjectCBOR, err := base64.StdEncoding.DecodeString(request.AttestationObjectCBOR)
 	if err != nil {
-		log.Print(err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
@@ -87,14 +84,12 @@ func (h *Handler) newPasskeyRoute(w http.ResponseWriter, r *http.Request) {
 		AuthData []byte `cbor:"authData"`
 	}
 	if err := cbor.Unmarshal(attestationObjectCBOR, &attestationObject); err != nil {
-		log.Print(err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
 	// The AT (Attested Credential Data) flag should be on for attested credential data.
 	if attestationObject.AuthData[32]&0x40 == 0 {
-		log.Print(err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
@@ -112,7 +107,6 @@ func (h *Handler) newPasskeyRoute(w http.ResponseWriter, r *http.Request) {
 	// -7 maps to ES256, which is ECDSA (Elliptic Curve Digital Signing Algorithm).
 	var credentialPublicKey CredentialPublicKey
 	if _, err := cbor.UnmarshalFirst(attestationObject.AuthData[offset:], &credentialPublicKey); err != nil || credentialPublicKey.Alg != -7 || credentialPublicKey.Crv != 1 {
-		log.Print(err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
@@ -125,21 +119,17 @@ func (h *Handler) newPasskeyRoute(w http.ResponseWriter, r *http.Request) {
 
 	credential, err := cbor.Marshal(credentialPublicKey)
 	if err != nil {
-		log.Print(err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
 	// Now add this passkey to the db.
 	if err = h.uploadPasskey(session.IdentityId, request.Id, credential); err != nil {
-		log.Print(err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	if err := h.recordActivity(session.IdentityId, "Added a passkey"); err != nil {
-		log.Print(err)
-	}
+	h.recordActivity(r.Context(), session.IdentityId, "Added a passkey")
 
 	w.WriteHeader(http.StatusOK)
 }
@@ -150,11 +140,12 @@ func passkeyMux(h *Handler) *http.ServeMux {
 	mux.Handle("/new", h.authenticated(h.post(http.HandlerFunc(h.newPasskeyRoute))))
 
 	mux.HandleFunc("/options", func(w http.ResponseWriter, r *http.Request) {
+		logger := loggerFromContext(r.Context())
+
 		// We're going to take advantage of the codes row's auto-incremented id
 		// as the temp session id, and attach the challenge as the code.
 		challenge, err := randomToken()
 		if err != nil {
-			log.Print(err)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
@@ -164,14 +155,14 @@ func passkeyMux(h *Handler) *http.ServeMux {
 			passkeyPurpose, hashToken(challenge), time.Now().Add(temporaryCodeTTL).Unix(),
 		)
 		if err != nil {
-			log.Print(err)
+			logger.Error("Unable to insert passkey challenge", zap.Error(err))
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 
 		id, err := res.LastInsertId()
 		if err != nil {
-			log.Print(err)
+			logger.Error("Unable to get passkey challenge", zap.Error(err))
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
@@ -181,11 +172,19 @@ func passkeyMux(h *Handler) *http.ServeMux {
 			"passkeySession":   id,
 			"passkeyChallenge": challenge,
 		}); err != nil {
-			log.Print(err)
+			logger.Error(
+				"Unable to encode passkey options",
+				zap.Error(err),
+				zap.Int64("passkeySession", id),
+				zap.String("passkeyChallenge", challenge),
+			)
+			w.WriteHeader(http.StatusInternalServerError)
 		}
 	})
 
 	mux.Handle("/login", h.post(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+
 		// todo(jc): Flash message as needed.
 		// Parse request.
 		var request struct {
@@ -197,7 +196,6 @@ func passkeyMux(h *Handler) *http.ServeMux {
 			Signature         string `json:"signature"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			log.Print(err)
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -223,7 +221,6 @@ func passkeyMux(h *Handler) *http.ServeMux {
 		}
 		publicKey, err := passkey.UnmarshalCredential()
 		if err != nil {
-			log.Print(err)
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
@@ -272,14 +269,18 @@ func passkeyMux(h *Handler) *http.ServeMux {
 
 		newSession, err := h.createSession(passkey.IdentityId, ip, device)
 		if err != nil {
-			log.Print(err)
+			logger := loggerFromContext(ctx)
+			logger.Error(
+				"Unable to create passkey session",
+				zap.Error(err),
+				zap.String("identityId", passkey.IdentityId),
+				zap.String("passkey", passkey.Id),
+			)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 
-		if err := h.recordActivity(passkey.IdentityId, "Logged in via passkey from "+ip); err != nil {
-			log.Print(err)
-		}
+		h.recordActivity(ctx, passkey.IdentityId, "Logged in via passkey from "+ip)
 
 		http.SetCookie(w, &http.Cookie{
 			Name:     "session",

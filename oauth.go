@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/ymfpfp/user-auth/oauth"
+	"go.uber.org/zap"
 )
 
 const (
@@ -19,7 +20,7 @@ func oauthMux(h *Handler) *http.ServeMux {
 
 	googleConfig, err := oauth.GetConfig(oauth.GoogleConfigEndpoint)
 	if err != nil {
-		log.Fatal("Unable to configure Google OIDC ", err)
+		log.Fatal("Unable to configure Google OIDC: ", err)
 	}
 	googleClient := oauth.Client{
 		Callback: googleCallback,
@@ -32,6 +33,8 @@ func oauthMux(h *Handler) *http.ServeMux {
 	mux.Handle("/oauth/callback/google", googleProvider.Callback(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()
+			logger := loggerFromContext(ctx)
+
 			claims, ok := oauth.ClaimsFromContext(ctx)
 			if !ok {
 				w.WriteHeader(http.StatusInternalServerError)
@@ -40,8 +43,8 @@ func oauthMux(h *Handler) *http.ServeMux {
 
 			// Upsert user and provider.
 			id, _, err := h.upsertLoginFromClaims(claims)
-			if id == "" {
-				log.Print(err)
+			if err != nil {
+				logger.Error("Unable to upsert login from claims", zap.Error(err))
 				w.WriteHeader(http.StatusForbidden)
 				return
 			}
@@ -56,14 +59,16 @@ func oauthMux(h *Handler) *http.ServeMux {
 
 			session, err := h.createSession(id, ip, device)
 			if err != nil {
-				log.Print(err)
+				logger.Error(
+					"oauth create session",
+					zap.String("identityId", id),
+					zap.Error(err),
+				)
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
 
-			if err := h.recordActivity(id, "Logged in via Google from "+ip); err != nil {
-				log.Print(err)
-			}
+			h.recordActivity(ctx, id, "Logged in via Google from "+ip)
 
 			// Return session cookie.
 			http.SetCookie(w, &http.Cookie{
@@ -124,14 +129,17 @@ func oauthMux(h *Handler) *http.ServeMux {
 			// Store GitHub as a provider.
 			err := h.linkProvider(session.IdentityId, claims.Issuer, claims.Subject, tokens.AccessToken)
 			if err != nil {
-				log.Print(err)
+				logger := loggerFromContext(ctx)
+				logger.Error(
+					"Unable to link GitHub",
+					zap.Error(err),
+					zap.String("identityId", session.IdentityId),
+				)
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
 
-			if err := h.recordActivity(session.IdentityId, "Connected GitHub"); err != nil {
-				log.Print(err)
-			}
+			h.recordActivity(ctx, session.IdentityId, "Connected GitHub")
 
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 		},

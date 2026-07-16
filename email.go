@@ -3,7 +3,6 @@ package main
 import (
 	"database/sql"
 	"errors"
-	"log"
 	"net"
 	"net/http"
 	"net/mail"
@@ -12,12 +11,15 @@ import (
 	"time"
 
 	email "github.com/ymfpfp/user-auth/email"
+	"go.uber.org/zap"
 )
 
 func emailMux(h *Handler) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	mux.Handle("/", h.post(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		logger := loggerFromContext(r.Context())
+
 		if err := r.ParseForm(); err != nil {
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 			return
@@ -32,7 +34,7 @@ func emailMux(h *Handler) *http.ServeMux {
 
 		code, err := h.issueLoginCode(email)
 		if err != nil {
-			log.Print(err)
+			logger.Error("Unable to issue login code", zap.Error(err))
 			http.Error(w, "Something went wrong. Try again.", http.StatusInternalServerError)
 			return
 		}
@@ -44,8 +46,11 @@ func emailMux(h *Handler) *http.ServeMux {
 		}
 
 		if err := h.sendLoginEmail(email, link.String()); err != nil {
-			// todo(jc): Non-fatal: the link is in the logs. In production you'd surface this.
-			log.Printf("email login: send failed: %v", err)
+			logger.Error(
+				"Unable to send login email",
+				zap.Error(err),
+			)
+
 			setCookie(
 				w,
 				"flash",
@@ -64,6 +69,8 @@ func emailMux(h *Handler) *http.ServeMux {
 	})))
 
 	mux.HandleFunc("/{code}", func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+
 		identityId, err := h.redeemLoginCode(r.PathValue("code"))
 		if err != nil {
 			// Unknown, already-used, or empty code. Send them back to the start.
@@ -79,14 +86,17 @@ func emailMux(h *Handler) *http.ServeMux {
 
 		session, err := h.createSession(identityId, ip, device)
 		if err != nil {
-			log.Print(err)
+			logger := loggerFromContext(ctx)
+			logger.Error(
+				"Unable to create email-password session",
+				zap.Error(err),
+				zap.String("identityId", identityId),
+			)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 
-		if err := h.recordActivity(identityId, "Logged in via email from "+ip); err != nil {
-			log.Print(err)
-		}
+		h.recordActivity(ctx, identityId, "Logged in via email "+ip)
 
 		http.SetCookie(w, &http.Cookie{
 			Name:     "session",
